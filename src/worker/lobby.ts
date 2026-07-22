@@ -253,6 +253,23 @@ export class BeatLobby extends DurableObject<Env> {
 				case "submit":
 					await this.withPlayer(att.playerId, (p) => {
 						if (this.phase !== "cookup") return;
+						const pack = this.pack();
+						if (!pack) return;
+						if (!msg.project.tagAudio) {
+							throw new Error("Record a producer tag before submitting");
+						}
+						for (const id of pack.brief.mustUseIds) {
+							const track = msg.project.tracks.find((t) => t.sampleId === id);
+							const hits = track?.steps.filter(Boolean).length ?? 0;
+							if (hits < 1) {
+								const name = pack.samples.find((s) => s.id === id)?.name ?? id;
+								throw new Error(`Must use required element: ${name}`);
+							}
+						}
+						// Cap tag payload (~350KB base64 ≈ ~250KB audio)
+						if (msg.project.tagAudio.length > 450_000) {
+							throw new Error("Tag too long — keep it under 2.5s");
+						}
 						p.project = msg.project;
 						p.submitted = true;
 					});

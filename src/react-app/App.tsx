@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
-import { EMPTY_PROJECT, GENRES, type Genre, type Heat, type Project } from "../shared/types";
+import {
+	EMPTY_PROJECT,
+	GENRES,
+	missingMustUse,
+	type Genre,
+	type Heat,
+	type Project,
+} from "../shared/types";
 import { Daw } from "./components/Daw";
+import { CookCard } from "./components/CookCard";
+import { TagRecorder } from "./components/TagRecorder";
 import { DawEngine } from "./audio/engine";
 import { useLobby } from "./hooks/useLobby";
 
@@ -120,9 +129,9 @@ export default function App() {
 					</div>
 					{homeError && <p className="error">{homeError}</p>}
 					<ul className="rules">
-						<li>Shared seeded sounds — no outside samples</li>
-						<li>Cook in the in-browser sequencer under the timer</li>
-						<li>Anonymous voting decides the round</li>
+						<li>Shared cook card — use the required elements</li>
+						<li>Record a funny producer tag (plays first)</li>
+						<li>Remix the starter groove under the timer · vote blind</li>
 					</ul>
 				</section>
 			</div>
@@ -353,16 +362,34 @@ function CookupView({
 	const pack = state.pack!;
 	const me = state.players.find((p) => p.id === you);
 	const [project, setProject] = useState<Project>(() => EMPTY_PROJECT(pack));
+	const [submitError, setSubmitError] = useState<string | null>(null);
 	const seconds = useCountdown(state.phaseEndsAt, state.serverNow);
+	const missing = missingMustUse(pack, project);
+
+	const submit = () => {
+		if (me?.submitted) return;
+		if (missing.length > 0) {
+			setSubmitError(`Use required elements first: ${missing.join(", ")}`);
+			return;
+		}
+		if (!project.tagAudio) {
+			setSubmitError("Record a producer tag before submitting — it's half the bit.");
+			return;
+		}
+		setSubmitError(null);
+		send({ type: "submit", project });
+	};
 
 	return (
 		<main className="cookup">
 			<div className="cook-header">
 				<div>
 					<h2>
-						{pack.genre} · Heat {pack.heat}
+						{pack.brief.title} · {pack.genre}
 					</h2>
-					<p>Only these sounds. Arrange, process, cook.</p>
+					<p>
+						Heat {pack.heat} · starter groove loaded · tag plays first
+					</p>
 				</div>
 				<div className={`timer ${seconds != null && seconds < 30 ? "urgent" : ""}`}>
 					{seconds != null ? formatTime(seconds) : "--:--"}
@@ -371,11 +398,12 @@ function CookupView({
 					type="button"
 					className="btn primary"
 					disabled={!!me?.submitted}
-					onClick={() => send({ type: "submit", project })}
+					onClick={submit}
 				>
 					{me?.submitted ? "Submitted" : "Submit beat"}
 				</button>
 			</div>
+			{submitError && <p className="error banner">{submitError}</p>}
 			<div className="submit-status">
 				{state.players
 					.filter((p) => p.connected)
@@ -385,12 +413,23 @@ function CookupView({
 						</span>
 					))}
 			</div>
-			<Daw
-				pack={pack}
-				project={project}
-				onChange={setProject}
-				locked={!!me?.submitted}
-			/>
+			<div className="cook-layout">
+				<div className="cook-side">
+					<CookCard pack={pack} project={project} />
+					<TagRecorder
+						tagAudio={project.tagAudio}
+						tagMime={project.tagMime}
+						locked={!!me?.submitted}
+						onChange={(tag) => setProject({ ...project, ...tag })}
+					/>
+				</div>
+				<Daw
+					pack={pack}
+					project={project}
+					onChange={setProject}
+					locked={!!me?.submitted}
+				/>
+			</div>
 		</main>
 	);
 }
@@ -419,7 +458,7 @@ function VotingView({
 		engine?.dispose();
 		const e = new DawEngine(project);
 		await e.loadPack(pack);
-		e.setProject(project);
+		await e.setProject(project);
 		await e.play();
 		setEngine(e);
 		setListening(id);
@@ -452,6 +491,9 @@ function VotingView({
 								<div>
 									<strong>{s.label}</strong>
 									{isMine && <em> (yours — can't vote)</em>}
+									{s.project.tagAudio ? (
+										<span className="tag-badge"> has tag</span>
+									) : null}
 								</div>
 								<div className="vote-actions">
 									<button

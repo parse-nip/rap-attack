@@ -14,8 +14,10 @@ Track what you should be able to explain before calling the session done.
 - [ ] How Durable Objects coordinate one lobby (WebSockets + alarms for phase timers)
 - [ ] Why packs are **seeded synths** instead of shipping large sample files
 - [ ] Why voting re-renders **project JSON** with the same pack instead of transferring audio
+- [ ] What a **cook card** is (must-use elements + starter groove) and why it exists
+- [ ] How the **producer tag** is recorded and why it plays before the loop
 - [ ] Cook → vote → results state machine and host controls
-- [ ] Edge cases: disconnects, host migration, no submissions, self-vote blocked, early vote when all submit
+- [ ] Edge cases: disconnects, host migration, no submissions, self-vote blocked, early vote when all submit, submit blocked without tag/must-use
 
 ## 3. Broader context
 

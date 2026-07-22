@@ -54,7 +54,7 @@ export function Daw({ pack, project, onChange, locked }: Props) {
 	}, [engine, pack]);
 
 	useEffect(() => {
-		engine.setProject(project);
+		void engine.setProject(project);
 	}, [engine, project]);
 
 	const sampleById = useMemo(() => {
@@ -170,7 +170,7 @@ export function Daw({ pack, project, onChange, locked }: Props) {
 					return (
 						<div
 							key={t.sampleId}
-							className={`seq-row ${selected === ti ? "selected" : ""}`}
+							className={`seq-row ${selected === ti ? "selected" : ""} ${s?.mustUse ? "must" : ""}`}
 							onClick={() => setSelected(ti)}
 						>
 							<button
@@ -183,7 +183,10 @@ export function Daw({ pack, project, onChange, locked }: Props) {
 									void engine.preview(t.sampleId, t.pitch, t.gain);
 								}}
 							>
-								<span className="role">{s?.role}</span>
+								<span className="role">
+									{s?.role}
+									{s?.mustUse ? " · MUST" : ""}
+								</span>
 								<span className="name">{s?.name}</span>
 							</button>
 							<div className="steps">

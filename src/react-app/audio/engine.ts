@@ -11,89 +11,67 @@ function midiToHz(midi: number): number {
 	return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
-function roleBaseMidi(role: SampleDef["role"]): number {
-	switch (role) {
-		case "kick":
-			return 36;
-		case "snare":
-			return 40;
-		case "hat":
-			return 42;
-		case "perc":
-			return 60;
-		case "bass":
-			return 36;
-		case "melody":
-			return 64;
-		case "fx":
-			return 72;
-		case "vocal":
-			return 60;
-		default:
-			return 60;
-	}
-}
-
 /** Synthesize a one-shot into an AudioBuffer from SampleDef */
 export function synthesizeSample(
 	ctx: BaseAudioContext,
 	def: SampleDef,
 ): AudioBuffer {
 	const sr = ctx.sampleRate;
-	const dur = 0.08 + def.decay * 0.9;
+	const dur =
+		def.role === "kick" || def.role === "bass"
+			? 0.18 + def.decay * 0.7
+			: 0.08 + def.decay * 0.75;
 	const len = Math.ceil(sr * dur);
 	const buffer = ctx.createBuffer(1, len, sr);
 	const data = buffer.getChannelData(0);
-	const baseMidi = roleBaseMidi(def.role) + (def.pitch - 0.5) * 24;
+	const baseMidi = def.rootMidi + (def.pitch - 0.5) * 4;
 	const freq = midiToHz(baseMidi);
 
 	for (let i = 0; i < len; i++) {
 		const t = i / sr;
-		const env = Math.exp(-t * (1.5 + (1 - def.decay) * 12));
+		const env = Math.exp(-t * (1.2 + (1 - def.decay) * 10));
 		let sig = 0;
 
 		if (def.role === "kick") {
-			const f = freq * (1 + Math.exp(-t * 40) * 2.5);
+			const f = freq * (1 + Math.exp(-t * 35) * 3.2);
 			sig = Math.sin(2 * Math.PI * f * t) * env;
-			sig += (Math.random() * 2 - 1) * 0.05 * Math.exp(-t * 80);
+			sig += (Math.random() * 2 - 1) * 0.04 * Math.exp(-t * 90);
 		} else if (def.role === "snare") {
-			const tone = Math.sin(2 * Math.PI * freq * 1.8 * t) * env * (1 - def.noise);
-			const noise = (Math.random() * 2 - 1) * Math.exp(-t * (8 + def.tone * 20));
-			sig = tone + noise * def.noise;
+			const tone = Math.sin(2 * Math.PI * 180 * t) * env * (1 - def.noise * 0.6);
+			const noise = (Math.random() * 2 - 1) * Math.exp(-t * (10 + def.tone * 18));
+			sig = tone + noise * (0.45 + def.noise * 0.5);
 		} else if (def.role === "hat") {
 			sig =
 				(Math.random() * 2 - 1) *
-				Math.exp(-t * (20 + (1 - def.decay) * 60)) *
-				(0.5 + def.noise * 0.5);
-			sig += Math.sin(2 * Math.PI * (6000 + def.tone * 4000) * t) * env * 0.15;
+				Math.exp(-t * (22 + (1 - def.decay) * 55)) *
+				(0.55 + def.noise * 0.4);
+			sig += Math.sin(2 * Math.PI * (7000 + def.tone * 3500) * t) * env * 0.12;
 		} else if (def.role === "bass") {
-			const f = freq * (0.5 + def.pitch);
+			const f = freq;
 			sig = Math.sin(2 * Math.PI * f * t) * env;
-			sig += Math.sin(2 * Math.PI * f * 2 * t) * env * def.harmonics * 0.4;
-			sig += Math.sin(2 * Math.PI * f * 3 * t) * env * def.harmonics * 0.15;
-			if (def.drive > 0.3) sig = Math.tanh(sig * (1 + def.drive * 4));
+			sig += Math.sin(2 * Math.PI * f * 2 * t) * env * def.harmonics * 0.35;
+			sig += Math.sin(2 * Math.PI * f * 3 * t) * env * def.harmonics * 0.12;
+			sig = Math.tanh(sig * (1.4 + def.drive * 3));
 		} else if (def.role === "melody" || def.role === "vocal") {
-			const partials = 1 + Math.floor(def.harmonics * 5);
+			const partials = 1 + Math.floor(def.harmonics * 4);
 			for (let h = 1; h <= partials; h++) {
-				const amp = (1 / h) * Math.pow(def.harmonics, h - 1);
+				const amp = (1 / h) * Math.pow(0.85, h - 1);
 				sig += Math.sin(2 * Math.PI * freq * h * t) * amp;
 			}
-			sig *= env * (0.7 + def.tone * 0.3);
+			sig *= env * (0.75 + def.tone * 0.25);
 			if (def.role === "vocal") {
-				sig *= 0.7 + 0.3 * Math.sin(2 * Math.PI * (5 + def.tone * 4) * t);
+				sig *= 0.75 + 0.25 * Math.sin(2 * Math.PI * (4.5 + def.tone * 3) * t);
 			}
 		} else if (def.role === "fx") {
-			const sweep = freq * (1 + t * (2 + def.pitch * 6));
+			const sweep = freq * (1 + t * (1.5 + def.pitch * 4));
 			sig = Math.sin(2 * Math.PI * sweep * t) * env;
-			sig += (Math.random() * 2 - 1) * env * def.noise * 0.5;
+			sig += (Math.random() * 2 - 1) * env * def.noise * 0.4;
 		} else {
-			// perc
-			sig = Math.sin(2 * Math.PI * freq * t) * env * (1 - def.noise * 0.5);
-			sig += (Math.random() * 2 - 1) * Math.exp(-t * 30) * def.noise;
+			sig = Math.sin(2 * Math.PI * freq * t) * env * (1 - def.noise * 0.4);
+			sig += (Math.random() * 2 - 1) * Math.exp(-t * 28) * def.noise;
 		}
 
-		// soft clip + drive
-		sig = Math.tanh(sig * (1 + def.drive * 3));
+		sig = Math.tanh(sig * (1 + def.drive * 2.5));
 		data[i] = sig * 0.9;
 	}
 
@@ -115,9 +93,11 @@ export class DawEngine {
 	ctx: AudioContext;
 	master: GainNode;
 	private samples = new Map<string, LoadedSample>();
+	private tagBuffer: AudioBuffer | null = null;
 	private timer: number | null = null;
 	private nextNoteTime = 0;
 	private currentStep = 0;
+	private tagPlayedThisLoop = false;
 	playing = false;
 	project: Project;
 	onStep?: (step: number) => void;
@@ -134,8 +114,22 @@ export class DawEngine {
 		this.samples = await loadPackBuffers(this.ctx, pack);
 	}
 
-	setProject(project: Project) {
+	async setProject(project: Project) {
 		this.project = project;
+		await this.loadTag(project);
+	}
+
+	private async loadTag(project: Project) {
+		if (!project.tagAudio) {
+			this.tagBuffer = null;
+			return;
+		}
+		try {
+			const bin = Uint8Array.from(atob(project.tagAudio), (c) => c.charCodeAt(0));
+			this.tagBuffer = await this.ctx.decodeAudioData(bin.buffer.slice(0));
+		} catch {
+			this.tagBuffer = null;
+		}
 	}
 
 	async resume() {
@@ -145,6 +139,17 @@ export class DawEngine {
 	private secondsPerStep(): number {
 		const bpm = this.project.bpm;
 		return 60 / bpm / 4; // 16th notes
+	}
+
+	private playTag(time: number) {
+		if (!this.tagBuffer) return;
+		const src = this.ctx.createBufferSource();
+		src.buffer = this.tagBuffer;
+		const g = this.ctx.createGain();
+		g.gain.value = 0.95;
+		src.connect(g);
+		g.connect(this.master);
+		src.start(time);
 	}
 
 	private scheduleNote(track: TrackPattern, time: number) {
@@ -188,6 +193,12 @@ export class DawEngine {
 				stepInBar % 2 === 1 ? this.project.swing * stepDur * 0.6 : 0;
 			const t = this.nextNoteTime + swing;
 
+			// Producer tag plays once at the very start of playback
+			if (this.currentStep === 0 && !this.tagPlayedThisLoop) {
+				this.playTag(Math.max(0, t - 0.02));
+				this.tagPlayedThisLoop = true;
+			}
+
 			for (const track of this.project.tracks) {
 				const idx = this.currentStep % 16;
 				if (track.steps[idx]) this.scheduleNote(track, t);
@@ -196,6 +207,9 @@ export class DawEngine {
 			this.onStep?.(this.currentStep % totalSteps);
 			this.nextNoteTime += stepDur;
 			this.currentStep = (this.currentStep + 1) % totalSteps;
+			if (this.currentStep === 0) {
+				// Only play tag on the first loop of a Play press
+			}
 		}
 		this.timer = window.setTimeout(this.scheduler, 25);
 	};
@@ -203,9 +217,17 @@ export class DawEngine {
 	async play() {
 		await this.resume();
 		if (this.playing) return;
+		await this.loadTag(this.project);
 		this.playing = true;
 		this.currentStep = 0;
-		this.nextNoteTime = this.ctx.currentTime + 0.05;
+		this.tagPlayedThisLoop = false;
+		// Leave a little runway so the tag can breathe before the groove
+		const lead = this.tagBuffer ? Math.min(1.1, this.tagBuffer.duration * 0.85) : 0.05;
+		this.nextNoteTime = this.ctx.currentTime + Math.max(0.05, lead);
+		if (this.tagBuffer) {
+			this.playTag(this.ctx.currentTime + 0.02);
+			this.tagPlayedThisLoop = true;
+		}
 		this.scheduler();
 	}
 
@@ -216,6 +238,7 @@ export class DawEngine {
 			this.timer = null;
 		}
 		this.currentStep = 0;
+		this.tagPlayedThisLoop = false;
 		this.onStep?.(0);
 	}
 
@@ -234,7 +257,13 @@ export class DawEngine {
 		src.start();
 	}
 
-	/** Offline-ish live playthrough of one loop for voting (starts play) */
+	async previewTag() {
+		await this.resume();
+		await this.loadTag(this.project);
+		if (!this.tagBuffer) return;
+		this.playTag(this.ctx.currentTime);
+	}
+
 	dispose() {
 		this.stop();
 		void this.ctx.close();
@@ -262,7 +291,20 @@ export async function renderProjectWav(
 	const sr = 44100;
 	const stepDur = 60 / project.bpm / 4;
 	const totalSteps = 16 * project.bars * loops;
-	const duration = totalSteps * stepDur + 0.5;
+
+	let tagBuf: AudioBuffer | null = null;
+	if (project.tagAudio) {
+		try {
+			const tmp = new OfflineAudioContext(1, 1, sr);
+			const bin = Uint8Array.from(atob(project.tagAudio), (c) => c.charCodeAt(0));
+			tagBuf = await tmp.decodeAudioData(bin.buffer.slice(0));
+		} catch {
+			tagBuf = null;
+		}
+	}
+
+	const lead = tagBuf ? Math.min(1.2, tagBuf.duration * 0.9) : 0;
+	const duration = lead + totalSteps * stepDur + 0.5;
 	const offline = new OfflineAudioContext(2, Math.ceil(sr * duration), sr);
 	const samples = new Map<string, LoadedSample>();
 	for (const def of pack.samples) {
@@ -273,10 +315,20 @@ export async function renderProjectWav(
 	master.gain.value = 0.85;
 	master.connect(offline.destination);
 
+	if (tagBuf) {
+		const src = offline.createBufferSource();
+		src.buffer = tagBuf;
+		const g = offline.createGain();
+		g.gain.value = 0.95;
+		src.connect(g);
+		g.connect(master);
+		src.start(0.02);
+	}
+
 	for (let step = 0; step < totalSteps; step++) {
 		const stepInBar = step % 16;
 		const swing = stepInBar % 2 === 1 ? project.swing * stepDur * 0.6 : 0;
-		const time = step * stepDur + swing;
+		const time = lead + step * stepDur + swing;
 		for (const track of project.tracks) {
 			if (!track.steps[step % 16] || track.mute) continue;
 			const anySolo = project.tracks.some((t) => t.solo);
