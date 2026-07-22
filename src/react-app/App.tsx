@@ -130,9 +130,9 @@ export default function App() {
 					</div>
 					{homeError && <p className="error">{homeError}</p>}
 					<ul className="rules">
-						<li>FL-style rack: patterns, playlist, graph editor, mixer inserts</li>
-						<li>Cook card must-use sounds + starter grooves</li>
-						<li>Record a producer tag · vote blind</li>
+						<li>Same pack + cook card — use the required sounds</li>
+						<li>Tap steps, tweak volume/pitch, record a tag</li>
+						<li>Submit and vote blind</li>
 					</ul>
 				</section>
 			</div>

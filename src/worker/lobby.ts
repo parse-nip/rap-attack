@@ -260,31 +260,23 @@ export class BeatLobby extends DurableObject<Env> {
 						}
 						for (const id of pack.brief.mustUseIds) {
 							const proj = msg.project as {
+								tracks?: { sampleId: string; steps: unknown[] }[];
 								channels?: { sampleId: string }[];
 								patterns?: { tracks: { steps: unknown[] }[] }[];
-								tracks?: { sampleId: string; steps: unknown[] }[];
 							};
 							let hits = 0;
-							if (proj.channels && proj.patterns) {
+							const on = (s: unknown) =>
+								typeof s === "boolean" ? s : !!(s as { on?: boolean })?.on;
+							if (proj.tracks?.length) {
+								const track = proj.tracks.find((t) => t.sampleId === id);
+								hits = track?.steps.filter(on).length ?? 0;
+							} else if (proj.channels && proj.patterns) {
 								const chIdx = proj.channels.findIndex((c) => c.sampleId === id);
 								if (chIdx >= 0) {
 									for (const pat of proj.patterns) {
-										const steps = pat.tracks?.[chIdx]?.steps ?? [];
-										hits += steps.filter((s) =>
-											typeof s === "boolean"
-												? s
-												: !!(s as { on?: boolean })?.on,
-										).length;
+										hits += pat.tracks?.[chIdx]?.steps.filter(on).length ?? 0;
 									}
 								}
-							} else if (proj.tracks) {
-								const track = proj.tracks.find((t) => t.sampleId === id);
-								hits =
-									track?.steps.filter((s) =>
-										typeof s === "boolean"
-											? s
-											: !!(s as { on?: boolean })?.on,
-									).length ?? 0;
 							}
 							if (hits < 1) {
 								const name = pack.samples.find((s) => s.id === id)?.name ?? id;

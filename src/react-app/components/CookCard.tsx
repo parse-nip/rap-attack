@@ -4,10 +4,9 @@ import { missingMustUse, normalizeProject, stepOn } from "../../shared/types";
 type Props = {
 	pack: Pack;
 	project: Project;
-	onPreviewSample?: (sampleId: string) => void;
 };
 
-export function CookCard({ pack, project, onPreviewSample }: Props) {
+export function CookCard({ pack, project }: Props) {
 	const p = normalizeProject(project);
 	const missing = missingMustUse(pack, p);
 	const mustSamples = pack.brief.mustUseIds
@@ -21,48 +20,32 @@ export function CookCard({ pack, project, onPreviewSample }: Props) {
 				<h3>{pack.brief.title}</h3>
 				<p className="vibe">{pack.brief.vibe}</p>
 			</header>
-
 			<div className="must-grid">
 				{mustSamples.map((s) => {
 					if (!s) return null;
-					const chIdx = p.channels.findIndex((c) => c.sampleId === s.id);
-					let hits = 0;
-					if (chIdx >= 0) {
-						for (const pat of p.patterns) {
-							hits +=
-								pat.tracks[chIdx]?.steps.filter((cell) => stepOn(cell)).length ??
-								0;
-						}
-					}
-					const ok = hits > 0;
+					const track = p.tracks.find((t) => t.sampleId === s.id);
+					const hits = track?.steps.filter((c) => stepOn(c)).length ?? 0;
 					return (
-						<button
+						<div
 							key={s.id}
-							type="button"
-							className={`must-chip ${ok ? "ok" : "need"}`}
-							onClick={() => onPreviewSample?.(s.id)}
-							title={s.useHint}
+							className={`must-chip ${hits > 0 ? "ok" : "need"}`}
 						>
 							<span className="must-role">{s.role}</span>
 							<span className="must-name">{s.name}</span>
-							<span className="must-state">{ok ? `${hits} hits` : "USE ME"}</span>
-						</button>
+							<span className="must-state">
+								{hits > 0 ? `${hits} hits` : "USE ME"}
+							</span>
+						</div>
 					);
 				})}
 			</div>
-
-			<ul className="cook-rules">
-				{pack.brief.rules.map((r) => (
-					<li key={r}>{r}</li>
-				))}
-			</ul>
 			<p className="cook-tip">
 				<strong>Tip:</strong> {pack.brief.tip}
 			</p>
 			{missing.length > 0 ? (
 				<p className="cook-warn">Still need: {missing.join(", ")}</p>
 			) : (
-				<p className="cook-ready">All required elements are in the pattern.</p>
+				<p className="cook-ready">Required sounds are in — nice.</p>
 			)}
 		</section>
 	);
