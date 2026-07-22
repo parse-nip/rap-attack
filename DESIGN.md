@@ -1,18 +1,27 @@
-# Beat Ranked DAW — keep it simple
+# Mouth Ranked — design
 
-We tried a full FL Studio–style editor (Pat/Song, pattern bank, playlist,
-graph editor, mixer inserts). It was too much for a timed beat battle.
+## Pivot
 
-## What we keep
-- One 16-step sequencer with a starter groove
-- Volume / pitch / filter / mute / solo on the selected track
-- Cook card (must-use sounds)
-- Producer voice tag at the start
-- Play / export
+FL Studio–style DAW and sample packs were too heavy. The game is now an **a cappella remake battle**:
 
-## What we dropped
-- Pattern banks, playlist, Pat/Song
-- Graph editor, browser panel, piano roll, pads
-- Dense mixer inserts
+1. Everyone hears the same **challenge song clip** (seeded synth reference — not a licensed commercial track).
+2. Players remake it using **only short recordings of their own voice** (drums / bass / melody / harmony / fx).
+3. Voice clips sit on a simple **16-step grid** per role.
+4. Submit → blind vote → standings.
 
-Goal: fun under a timer, not a DAW tutorial.
+## Why this shape
+
+- **One clear verb:** listen → record mouth layers → arrange → submit.
+- **No sample browser / mixer complexity** — the mic *is* the instrument.
+- **Copyright-safe:** reference is generated from seed + genre + heat, not ripped audio.
+- **Heat still matters:** higher heat requires more voice roles (harmony, fx).
+
+## Data model
+
+- `Challenge` — genre, bpm, key, vibe, `mustRoles`
+- `Project` — `clips[]` (base64 voice) + `lanes[]` (role, steps, gain, pitch)
+- Lobby DO still owns phases: `lobby` → `cookup` → `voting` → `results`
+
+## UX budget
+
+First cookup screen: challenge title + play song + play remake + voice lanes. No cards in the hero, no FL chrome.

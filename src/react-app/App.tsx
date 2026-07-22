@@ -2,16 +2,14 @@ import { useEffect, useState } from "react";
 import {
 	EMPTY_PROJECT,
 	GENRES,
-	missingMustUse,
+	missingVoiceRoles,
 	normalizeProject,
 	type Genre,
 	type Heat,
 	type Project,
 } from "../shared/types";
-import { Daw } from "./components/Daw";
-import { CookCard } from "./components/CookCard";
-import { TagRecorder } from "./components/TagRecorder";
-import { DawEngine } from "./audio/engine";
+import { AcapellaStudio } from "./components/AcapellaStudio";
+import { AcapellaEngine } from "./audio/engine";
 import { useLobby } from "./hooks/useLobby";
 
 function useCountdown(endsAt: number | null, serverNow: number) {
@@ -51,14 +49,14 @@ export default function App() {
 
 	const { status, error, state, you, send } = useLobby(
 		screen === "room" ? code : null,
-		screen === "room" ? name.trim() || "Producer" : null,
+		screen === "room" ? name.trim() || "Voice" : null,
 	);
 
 	const createLobby = async () => {
 		setBusy(true);
 		setHomeError(null);
 		try {
-			localStorage.setItem("bb-name", name.trim() || "Producer");
+			localStorage.setItem("bb-name", name.trim() || "Voice");
 			const res = await fetch("/api/lobbies", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
@@ -80,7 +78,7 @@ export default function App() {
 			setHomeError("Enter a valid lobby code");
 			return;
 		}
-		localStorage.setItem("bb-name", name.trim() || "Producer");
+		localStorage.setItem("bb-name", name.trim() || "Voice");
 		setCode(c);
 		setScreen("room");
 	};
@@ -90,20 +88,20 @@ export default function App() {
 			<div className="shell home">
 				<div className="atmosphere" aria-hidden />
 				<header className="brand-block">
-					<p className="eyebrow">popped.dev · web beat battle</p>
-					<h1 className="brand">Beat Ranked</h1>
+					<p className="eyebrow">popped.dev · a cappella remake battle</p>
+					<h1 className="brand">Mouth Ranked</h1>
 					<p className="tagline">
-						Same pack. Same clock. Browser DAW. Vote the cook.
+						Hear the song clip. Remake it with only your voice. Vote blind.
 					</p>
 				</header>
 
 				<section className="home-panel">
 					<label>
-						Producer name
+						Your name
 						<input
 							value={name}
 							onChange={(e) => setName(e.target.value)}
-							placeholder="your tag"
+							placeholder="stage name"
 							maxLength={18}
 						/>
 					</label>
@@ -130,9 +128,9 @@ export default function App() {
 					</div>
 					{homeError && <p className="error">{homeError}</p>}
 					<ul className="rules">
-						<li>Same pack + cook card — use the required sounds</li>
-						<li>Tap steps, tweak volume/pitch, record a tag</li>
-						<li>Submit and vote blind</li>
+						<li>Same challenge track for everyone</li>
+						<li>Beatbox drums, hum bass, sing the hook — only voice clips</li>
+						<li>Submit your remake and vote blind</li>
 					</ul>
 				</section>
 			</div>
@@ -169,7 +167,7 @@ export default function App() {
 			<div className="atmosphere" aria-hidden />
 			<header className="topbar">
 				<div>
-					<span className="brand-mini">Beat Ranked</span>
+					<span className="brand-mini">Mouth Ranked</span>
 					<span className="code">Lobby {state.code}</span>
 				</div>
 				<div className="meta">
@@ -193,15 +191,15 @@ export default function App() {
 					}}
 				/>
 			)}
-			{state.phase === "cookup" && state.pack && (
+			{state.phase === "cookup" && state.challenge && (
 				<CookupView
-					key={state.pack.seed}
+					key={state.challenge.seed}
 					state={state}
 					you={you}
 					send={send}
 				/>
 			)}
-			{state.phase === "voting" && state.pack && (
+			{state.phase === "voting" && state.challenge && (
 				<VotingView state={state} you={you} send={send} />
 			)}
 			{state.phase === "results" && (
@@ -229,7 +227,7 @@ function LobbyView({
 	return (
 		<main className="lobby">
 			<section className="players">
-				<h2>Producers</h2>
+				<h2>Voices</h2>
 				<ul>
 					{state.players.map((p) => (
 						<li key={p.id} className={p.id === you ? "you" : ""}>
@@ -343,8 +341,8 @@ function LobbyView({
 					</button>
 				</div>
 				<p className="hint">
-					Share code <strong>{state.code}</strong> — higher heat = weirder
-					seeded sounds.
+					Share code <strong>{state.code}</strong> — higher heat means more
+					required voice layers.
 				</p>
 			</section>
 		</main>
@@ -360,21 +358,17 @@ function CookupView({
 	you: string | null;
 	send: ReturnType<typeof useLobby>["send"];
 }) {
-	const pack = state.pack!;
+	const challenge = state.challenge!;
 	const me = state.players.find((p) => p.id === you);
-	const [project, setProject] = useState<Project>(() => EMPTY_PROJECT(pack));
+	const [project, setProject] = useState<Project>(() => EMPTY_PROJECT(challenge));
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const seconds = useCountdown(state.phaseEndsAt, state.serverNow);
-	const missing = missingMustUse(pack, project);
+	const missing = missingVoiceRoles(challenge, project);
 
 	const submit = () => {
 		if (me?.submitted) return;
 		if (missing.length > 0) {
-			setSubmitError(`Use required elements first: ${missing.join(", ")}`);
-			return;
-		}
-		if (!project.tagAudio) {
-			setSubmitError("Record a producer tag before submitting — it's half the bit.");
+			setSubmitError(`Still need voice for: ${missing.join(", ")}`);
 			return;
 		}
 		setSubmitError(null);
@@ -385,11 +379,9 @@ function CookupView({
 		<main className="cookup">
 			<div className="cook-header">
 				<div>
-					<h2>
-						{pack.brief.title} · {pack.genre}
-					</h2>
+					<h2>Remake the clip</h2>
 					<p>
-						Heat {pack.heat} · starter groove loaded · tag plays first
+						Heat {challenge.heat} · only your voice · no samples
 					</p>
 				</div>
 				<div className={`timer ${seconds != null && seconds < 30 ? "urgent" : ""}`}>
@@ -401,7 +393,7 @@ function CookupView({
 					disabled={!!me?.submitted}
 					onClick={submit}
 				>
-					{me?.submitted ? "Submitted" : "Submit beat"}
+					{me?.submitted ? "Submitted" : "Submit remake"}
 				</button>
 			</div>
 			{submitError && <p className="error banner">{submitError}</p>}
@@ -414,23 +406,12 @@ function CookupView({
 						</span>
 					))}
 			</div>
-			<div className="cook-layout">
-				<div className="cook-side">
-					<CookCard pack={pack} project={project} />
-					<TagRecorder
-						tagAudio={project.tagAudio}
-						tagMime={project.tagMime}
-						locked={!!me?.submitted}
-						onChange={(tag) => setProject({ ...project, ...tag })}
-					/>
-				</div>
-				<Daw
-					pack={pack}
-					project={project}
-					onChange={setProject}
-					locked={!!me?.submitted}
-				/>
-			</div>
+			<AcapellaStudio
+				challenge={challenge}
+				project={project}
+				onChange={setProject}
+				locked={!!me?.submitted}
+			/>
 		</main>
 	);
 }
@@ -444,10 +425,10 @@ function VotingView({
 	you: string | null;
 	send: ReturnType<typeof useLobby>["send"];
 }) {
-	const pack = state.pack!;
+	const challenge = state.challenge!;
 	const seconds = useCountdown(state.phaseEndsAt, state.serverNow);
 	const [listening, setListening] = useState<string | null>(null);
-	const [engine, setEngine] = useState<DawEngine | null>(null);
+	const [engine, setEngine] = useState<AcapellaEngine | null>(null);
 
 	useEffect(() => {
 		return () => {
@@ -457,12 +438,21 @@ function VotingView({
 
 	const playSub = async (id: string, project: Project) => {
 		engine?.dispose();
-		const e = new DawEngine(project);
-		await e.loadPack(pack);
+		const e = new AcapellaEngine(project);
+		await e.setChallenge(challenge);
 		await e.setProject(project);
-		await e.play();
+		await e.playRemake();
 		setEngine(e);
 		setListening(id);
+	};
+
+	const playRef = async () => {
+		engine?.dispose();
+		const e = new AcapellaEngine(EMPTY_PROJECT(challenge));
+		await e.setChallenge(challenge);
+		await e.playReference();
+		setEngine(e);
+		setListening("ref");
 	};
 
 	const stop = () => {
@@ -475,11 +465,24 @@ function VotingView({
 			<div className="cook-header">
 				<div>
 					<h2>Vote blind</h2>
-					<p>No self-votes. Pick the strongest cook.</p>
+					<p>
+						{challenge.title} · whose mouth remake hits hardest?
+					</p>
 				</div>
 				<div className="timer">
 					{seconds != null ? formatTime(seconds) : "--:--"}
 				</div>
+			</div>
+			<div className="vote-ref">
+				<button
+					type="button"
+					className="btn"
+					onClick={() =>
+						listening === "ref" ? stop() : void playRef()
+					}
+				>
+					{listening === "ref" ? "Stop original" : "Replay song clip"}
+				</button>
 			</div>
 			{state.submissions.length === 0 ? (
 				<p className="hint">No submissions this round — wait for results.</p>
@@ -487,14 +490,13 @@ function VotingView({
 				<ul className="vote-list">
 					{state.submissions.map((s) => {
 						const isMine = s.id === you;
+						const layers = s.project.clips?.length ?? 0;
 						return (
 							<li key={s.id} className={state.myVote === s.id ? "voted" : ""}>
 								<div>
 									<strong>{s.label}</strong>
 									{isMine && <em> (yours — can't vote)</em>}
-									{s.project.tagAudio ? (
-										<span className="tag-badge"> has tag</span>
-									) : null}
+									<span className="tag-badge"> {layers} voice layer{layers === 1 ? "" : "s"}</span>
 								</div>
 								<div className="vote-actions">
 									<button
@@ -506,7 +508,7 @@ function VotingView({
 												: void playSub(s.id, s.project)
 										}
 									>
-										{listening === s.id ? "Stop" : "Play"}
+										{listening === s.id ? "Stop" : "Play remake"}
 									</button>
 									<button
 										type="button"
@@ -552,7 +554,9 @@ function ResultsView({
 				{ranked.map((s) => (
 					<li key={s.id}>
 						<span>{s.label}</span>
-						<span>{s.votes} vote{s.votes === 1 ? "" : "s"}</span>
+						<span>
+							{s.votes} vote{s.votes === 1 ? "" : "s"}
+						</span>
 					</li>
 				))}
 			</ol>

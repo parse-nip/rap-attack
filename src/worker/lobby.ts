@@ -1,7 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
-import { generatePack, lobbyCodeFromSeed } from "../shared/packs";
+import { generateChallenge, lobbyCodeFromSeed } from "../shared/packs";
 import {
 	DEFAULT_SETTINGS,
+	missingVoiceRoles,
+	normalizeProject,
+	projectAudioBytes,
 	type ClientMessage,
 	type LobbySettings,
 	type LobbyState,
@@ -28,7 +31,9 @@ type Persisted = {
 	phase: Phase;
 	settings: LobbySettings;
 	players: PlayerRecord[];
-	packSeed: number | null;
+	challengeSeed: number | null;
+	/** @deprecated migrated → challengeSeed */
+	packSeed?: number | null;
 	round: number;
 	phaseEndsAt: number | null;
 	winnerId: string | null;
@@ -42,7 +47,7 @@ export class BeatLobby extends DurableObject<Env> {
 	private players = new Map<string, PlayerRecord>();
 	private phase: Phase = "lobby";
 	private settings: LobbySettings = { ...DEFAULT_SETTINGS };
-	private packSeed: number | null = null;
+	private challengeSeed: number | null = null;
 	private round = 0;
 	private phaseEndsAt: number | null = null;
 	private winnerId: string | null = null;
@@ -56,7 +61,7 @@ export class BeatLobby extends DurableObject<Env> {
 			this.code = data.code;
 			this.phase = data.phase;
 			this.settings = data.settings;
-			this.packSeed = data.packSeed;
+			this.challengeSeed = data.challengeSeed ?? data.packSeed ?? null;
 			this.round = data.round;
 			this.phaseEndsAt = data.phaseEndsAt;
 			this.winnerId = data.winnerId;
@@ -75,7 +80,7 @@ export class BeatLobby extends DurableObject<Env> {
 			phase: this.phase,
 			settings: this.settings,
 			players: [...this.players.values()],
-			packSeed: this.packSeed,
+			challengeSeed: this.challengeSeed,
 			round: this.round,
 			phaseEndsAt: this.phaseEndsAt,
 			winnerId: this.winnerId,
@@ -92,10 +97,10 @@ export class BeatLobby extends DurableObject<Env> {
 		return ids;
 	}
 
-	private pack() {
-		if (this.packSeed == null) return null;
-		return generatePack(
-			this.packSeed,
+	private challenge() {
+		if (this.challengeSeed == null) return null;
+		return generateChallenge(
+			this.challengeSeed,
 			this.settings.heat,
 			this.settings.genreMode,
 		);
@@ -112,7 +117,10 @@ export class BeatLobby extends DurableObject<Env> {
 		}
 		return submitted.map((p, i) => ({
 			id: p.id,
-			label: this.phase === "results" ? p.name : `Beat ${String.fromCharCode(65 + i)}`,
+			label:
+				this.phase === "results"
+					? p.name
+					: `Remake ${String.fromCharCode(65 + i)}`,
 			project: p.project!,
 			votes: votes.get(p.id) ?? 0,
 		}));
@@ -136,7 +144,7 @@ export class BeatLobby extends DurableObject<Env> {
 			phase: this.phase,
 			settings: this.settings,
 			players,
-			pack: this.pack(),
+			challenge: this.challenge(),
 			round: this.round,
 			phaseEndsAt: this.phaseEndsAt,
 			submissions: this.submissionsPublic(),
@@ -253,41 +261,22 @@ export class BeatLobby extends DurableObject<Env> {
 				case "submit":
 					await this.withPlayer(att.playerId, (p) => {
 						if (this.phase !== "cookup") return;
-						const pack = this.pack();
-						if (!pack) return;
-						if (!msg.project.tagAudio) {
-							throw new Error("Record a producer tag before submitting");
+						const challenge = this.challenge();
+						if (!challenge) return;
+						const project = normalizeProject(msg.project);
+						const missing = missingVoiceRoles(challenge, project);
+						if (missing.length) {
+							throw new Error(
+								`Record & place voice for: ${missing.join(", ")}`,
+							);
 						}
-						for (const id of pack.brief.mustUseIds) {
-							const proj = msg.project as {
-								tracks?: { sampleId: string; steps: unknown[] }[];
-								channels?: { sampleId: string }[];
-								patterns?: { tracks: { steps: unknown[] }[] }[];
-							};
-							let hits = 0;
-							const on = (s: unknown) =>
-								typeof s === "boolean" ? s : !!(s as { on?: boolean })?.on;
-							if (proj.tracks?.length) {
-								const track = proj.tracks.find((t) => t.sampleId === id);
-								hits = track?.steps.filter(on).length ?? 0;
-							} else if (proj.channels && proj.patterns) {
-								const chIdx = proj.channels.findIndex((c) => c.sampleId === id);
-								if (chIdx >= 0) {
-									for (const pat of proj.patterns) {
-										hits += pat.tracks?.[chIdx]?.steps.filter(on).length ?? 0;
-									}
-								}
-							}
-							if (hits < 1) {
-								const name = pack.samples.find((s) => s.id === id)?.name ?? id;
-								throw new Error(`Must use required element: ${name}`);
-							}
+						if (!project.lanes.some((l) => l.clipId && l.steps.some(Boolean))) {
+							throw new Error("Place at least one voice clip on the grid");
 						}
-						// Cap tag payload (~350KB base64 ≈ ~250KB audio)
-						if (msg.project.tagAudio.length > 450_000) {
-							throw new Error("Tag too long — keep it under 2.5s");
+						if (projectAudioBytes(project) > 2_000_000) {
+							throw new Error("Voice clips too large — re-record shorter takes");
 						}
-						p.project = msg.project;
+						p.project = project;
 						p.submitted = true;
 					});
 					await this.maybeEarlyVote();
@@ -306,7 +295,7 @@ export class BeatLobby extends DurableObject<Env> {
 						if (!p.isHost || this.phase !== "results") return;
 						this.phase = "lobby";
 						this.phaseEndsAt = null;
-						this.packSeed = null;
+						this.challengeSeed = null;
 						this.winnerId = null;
 						for (const pl of this.players.values()) {
 							pl.ready = false;
@@ -391,7 +380,7 @@ export class BeatLobby extends DurableObject<Env> {
 		this.round += 1;
 		this.phase = "cookup";
 		this.winnerId = null;
-		this.packSeed = (Math.random() * 0xffffffff) >>> 0;
+		this.challengeSeed = (Math.random() * 0xffffffff) >>> 0;
 		this.phaseEndsAt = Date.now() + this.settings.roundSeconds * 1000;
 
 		for (const p of this.players.values()) {

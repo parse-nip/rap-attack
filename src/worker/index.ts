@@ -11,7 +11,12 @@ function lobbyStub(env: Env, code: string) {
 }
 
 app.get("/api/health", (c) =>
-	c.json({ ok: true, service: "beat-battle", domain: "beats.popped.dev" }),
+	c.json({
+		ok: true,
+		service: "mouth-ranked",
+		mode: "acapella-remake",
+		domain: "beats.popped.dev",
+	}),
 );
 
 app.post("/api/lobbies", async (c) => {

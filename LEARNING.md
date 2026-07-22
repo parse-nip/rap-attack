@@ -1,33 +1,29 @@
-# Beat Ranked — understanding checklist
+# Learning checklist — Mouth Ranked pivot
 
-Track what you should be able to explain before calling the session done.
+Track understanding as you go. Check items only when you can explain them in your own words.
 
 ## 1. The problem
 
-- [ ] What is a beat battle / FL Studio Ranked-style lobby?
-- [ ] Why do shared samples + a timer create pressure and fairness?
-- [ ] Why can’t a naive “everyone uploads a WAV” design scale well on the edge?
-- [ ] What branches of design exist: native FL plugin vs web DAW vs Discord-only voting?
+- [ ] Why FL-style DAW + sample packs was the wrong fit for this lobby game
+- [ ] What “remake with only your voice” means for players
+- [ ] Why we generate a reference clip instead of using a real commercial song
 
 ## 2. The solution
 
-- [ ] How Durable Objects coordinate one lobby (WebSockets + alarms for phase timers)
-- [ ] Why packs are **seeded synths** instead of shipping large sample files
-- [ ] Why voting re-renders **project JSON** with the same pack instead of transferring audio
-- [ ] What a **cook card** is (must-use elements + starter groove) and why it exists
-- [ ] FL Pat vs Song mode and why patterns get arranged in a Playlist
-- [ ] Channel Rack + Graph Editor (velocity/pitch/pan per step)
-- [ ] Mixer inserts (EQ/comp) vs send FX
-- [ ] What we deliberately left out of FL (VSTs, Edison, 999 patterns) and why
+- [ ] `Challenge` vs old `Pack` — what fields matter and why
+- [ ] How voice `clips` + `lanes` replace sequencer tracks
+- [ ] Why submit validates `mustRoles` (record + at least one step)
+- [ ] How `AcapellaEngine` plays the reference vs the remake
+- [ ] Lobby phases still: lobby → cookup → voting → results (what changed inside cookup)
 
 ## 3. Broader context
 
-- [ ] What deploying to `beats.popped.dev` on Workers means (assets + DO + custom domain)
-- [ ] What this changes for players (zero install, share a link)
-- [ ] Limits of an in-browser DAW vs full FL Studio (and why that’s OK for battles)
+- [ ] What this changes for players (skill: mouth sound design, not FL muscle memory)
+- [ ] Payload / size limits on voice base64 — why they exist
+- [ ] Heat’s new meaning (more required roles, not weirder samples)
 
-## Quick self-check prompts
+## Quiz prompts (answer before peeking at code)
 
-1. If two players get the same seed, do they hear the same kick? Why?
-2. What wakes the lobby DO when the cook timer hits zero?
-3. Why is the submission a `Project` object, not a file?
+1. If heat is 5, which roles must the player cover?
+2. What happens if someone records melody but leaves all melody steps off?
+3. Where does the “song clip” audio actually come from at runtime?

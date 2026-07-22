@@ -1,82 +1,152 @@
-/** Simple Web Audio engine for Beat Ranked */
+/** Reference song synth + voice-lane playback for a cappella battles */
 
-import type { Pack, Project, SampleDef, TrackPattern } from "../../shared/types";
-import { asStep, normalizeProject, stepOn } from "../../shared/types";
-
-export type LoadedSample = { def: SampleDef; buffer: AudioBuffer };
+import type { Challenge, Project, VoiceRole } from "../../shared/types";
+import { normalizeProject } from "../../shared/types";
+import { mulberry32 } from "../../shared/packs";
 
 function midiToHz(midi: number) {
 	return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
-export function synthesizeSample(ctx: BaseAudioContext, def: SampleDef): AudioBuffer {
-	const sr = ctx.sampleRate;
-	const dur =
-		def.role === "kick" || def.role === "bass"
-			? 0.2 + def.decay * 0.7
-			: 0.1 + def.decay * 0.7;
-	const len = Math.ceil(sr * dur);
-	const buffer = ctx.createBuffer(1, len, sr);
-	const data = buffer.getChannelData(0);
-	const freq = midiToHz(def.rootMidi + (def.pitch - 0.5) * 4);
+function drumPattern(genre: Challenge["genre"]): {
+	kick: number[];
+	snare: number[];
+	hat: number[];
+} {
+	if (genre === "House" || genre === "EDM") {
+		return {
+			kick: [0, 4, 8, 12],
+			snare: [4, 12],
+			hat: [0, 2, 4, 6, 8, 10, 12, 14],
+		};
+	}
+	if (genre === "Drill") {
+		return { kick: [0, 6, 8, 14], snare: [4, 12], hat: [0, 1, 2, 3, 8, 9, 10, 11] };
+	}
+	if (genre === "Lo-Fi" || genre === "R&B") {
+		return { kick: [0, 6, 10], snare: [4, 12], hat: [2, 6, 8, 11, 14] };
+	}
+	return { kick: [0, 7, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14] };
+}
 
-	for (let i = 0; i < len; i++) {
-		const t = i / sr;
-		const env = Math.exp(-t * (1.2 + (1 - def.decay) * 10));
+function melodyContour(seed: number): number[] {
+	const rand = mulberry32(seed ^ 0xabc);
+	const degrees = [0, 2, 3, 5, 7, 8, 10, 12];
+	return Array.from({ length: 16 }, (_, i) =>
+		i % 2 === 0 ? degrees[Math.floor(rand() * degrees.length)]! : -99,
+	);
+}
+
+function writeTone(
+	data: Float32Array,
+	sr: number,
+	start: number,
+	dur: number,
+	freq: number,
+	amp: number,
+	type: "sine" | "square" | "noise" | "kick",
+) {
+	const n0 = Math.floor(start * sr);
+	const n1 = Math.min(data.length, Math.floor((start + dur) * sr));
+	for (let i = n0; i < n1; i++) {
+		const t = (i - n0) / sr;
+		const env = Math.exp(-t * (type === "kick" ? 8 : 6));
 		let sig = 0;
-		if (def.role === "kick") {
-			const f = freq * (1 + Math.exp(-t * 35) * 3.2);
+		if (type === "noise") sig = (Math.random() * 2 - 1) * env;
+		else if (type === "kick") {
+			const f = freq * (1 + Math.exp(-t * 40) * 3);
 			sig = Math.sin(2 * Math.PI * f * t) * env;
-		} else if (def.role === "snare") {
-			sig =
-				Math.sin(2 * Math.PI * 180 * t) * env * 0.4 +
-				(Math.random() * 2 - 1) * Math.exp(-t * 14) * 0.7;
-		} else if (def.role === "hat") {
-			sig = (Math.random() * 2 - 1) * Math.exp(-t * (25 + (1 - def.decay) * 50));
-		} else if (def.role === "bass") {
-			sig = Math.tanh(
-				(Math.sin(2 * Math.PI * freq * t) +
-					Math.sin(2 * Math.PI * freq * 2 * t) * 0.3) *
-					env *
-					1.5,
-			);
-		} else if (def.role === "melody" || def.role === "vocal") {
-			sig =
-				(Math.sin(2 * Math.PI * freq * t) +
-					Math.sin(2 * Math.PI * freq * 2 * t) * 0.35) *
-				env;
-			if (def.role === "vocal") {
-				sig *= 0.8 + 0.2 * Math.sin(2 * Math.PI * 5 * t);
-			}
-		} else if (def.role === "fx") {
-			sig = Math.sin(2 * Math.PI * freq * (1 + t * 3) * t) * env;
-		} else {
-			sig =
-				Math.sin(2 * Math.PI * freq * t) * env * 0.7 +
-				(Math.random() * 2 - 1) * Math.exp(-t * 30) * 0.3;
+		} else if (type === "square") {
+			sig = Math.sign(Math.sin(2 * Math.PI * freq * t)) * env * 0.5;
+		} else sig = Math.sin(2 * Math.PI * freq * t) * env;
+		data[i] = Math.max(-1, Math.min(1, (data[i] ?? 0) + sig * amp));
+	}
+}
+
+/** Build a short reference "song clip" everyone hears */
+export function renderReferenceBuffer(
+	ctx: BaseAudioContext,
+	challenge: Challenge,
+): AudioBuffer {
+	const sr = ctx.sampleRate;
+	const stepDur = 60 / challenge.bpm / 4;
+	const steps = 16 * challenge.bars;
+	const dur = steps * stepDur + 0.3;
+	const buffer = ctx.createBuffer(2, Math.ceil(sr * dur), sr);
+	const L = buffer.getChannelData(0);
+	const R = buffer.getChannelData(1);
+	const mono = new Float32Array(L.length);
+
+	const drums = drumPattern(challenge.genre);
+	const contour = melodyContour(challenge.seed);
+	const root = challenge.keyMidi;
+
+	for (let s = 0; s < steps; s++) {
+		const t = s * stepDur;
+		const i = s % 16;
+		if (drums.kick.includes(i)) {
+			writeTone(mono, sr, t, 0.25, midiToHz(root - 12), 0.9, "kick");
 		}
-		data[i] = Math.tanh(sig) * 0.9;
+		if (drums.snare.includes(i)) {
+			writeTone(mono, sr, t, 0.18, 180, 0.55, "noise");
+			writeTone(mono, sr, t, 0.12, 220, 0.25, "sine");
+		}
+		if (drums.hat.includes(i)) {
+			writeTone(mono, sr, t, 0.06, 8000, 0.22, "noise");
+		}
+		// bass
+		if (drums.kick.includes(i) || i === 0 || i === 8) {
+			const deg = i >= 8 ? -5 : 0;
+			writeTone(mono, sr, t, stepDur * 1.6, midiToHz(root - 12 + deg), 0.55, "sine");
+		}
+		// melody
+		const m = contour[i]!;
+		if (m !== -99) {
+			writeTone(
+				mono,
+				sr,
+				t,
+				stepDur * 1.4,
+				midiToHz(root + 12 + m),
+				0.35,
+				challenge.genre === "Hyperpop" ? "square" : "sine",
+			);
+		}
+		// harmony ghost
+		if (i === 0 || i === 8) {
+			writeTone(mono, sr, t, stepDur * 3, midiToHz(root + 19), 0.12, "sine");
+		}
+	}
+
+	for (let i = 0; i < mono.length; i++) {
+		L[i] = mono[i]!;
+		R[i] = mono[i]! * 0.96;
 	}
 	return buffer;
 }
 
-export async function loadPackBuffers(ctx: BaseAudioContext, pack: Pack) {
-	const map = new Map<string, LoadedSample>();
-	for (const def of pack.samples) {
-		map.set(def.id, { def, buffer: synthesizeSample(ctx, def) });
+async function decodeBase64Audio(
+	ctx: BaseAudioContext,
+	b64: string,
+): Promise<AudioBuffer | null> {
+	try {
+		const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+		return await ctx.decodeAudioData(bin.buffer.slice(0));
+	} catch {
+		return null;
 	}
-	return map;
 }
 
-export class DawEngine {
+export class AcapellaEngine {
 	ctx: AudioContext;
 	master: GainNode;
-	private samples = new Map<string, LoadedSample>();
-	private tagBuffer: AudioBuffer | null = null;
 	private timer: number | null = null;
 	private nextNoteTime = 0;
 	private currentStep = 0;
+	private clipBuffers = new Map<string, AudioBuffer>();
+	private reference: AudioBuffer | null = null;
 	playing = false;
+	playingRef = false;
 	project: Project;
 	onStep?: (step: number) => void;
 
@@ -88,68 +158,54 @@ export class DawEngine {
 		this.master.connect(this.ctx.destination);
 	}
 
-	async loadPack(pack: Pack) {
-		this.samples = await loadPackBuffers(this.ctx, pack);
+	async resume() {
+		if (this.ctx.state !== "running") await this.ctx.resume();
+	}
+
+	async setChallenge(challenge: Challenge) {
+		this.reference = renderReferenceBuffer(this.ctx, challenge);
 	}
 
 	async setProject(project: Project) {
 		this.project = normalizeProject(project);
 		this.master.gain.value = this.project.masterGain;
-		await this.loadTag(this.project);
-	}
-
-	private async loadTag(project: Project) {
-		if (!project.tagAudio) {
-			this.tagBuffer = null;
-			return;
-		}
-		try {
-			const bin = Uint8Array.from(atob(project.tagAudio), (c) => c.charCodeAt(0));
-			this.tagBuffer = await this.ctx.decodeAudioData(bin.buffer.slice(0));
-		} catch {
-			this.tagBuffer = null;
+		this.clipBuffers.clear();
+		for (const clip of this.project.clips) {
+			const buf = await decodeBase64Audio(this.ctx, clip.audioBase64);
+			if (buf) this.clipBuffers.set(clip.id, buf);
 		}
 	}
 
-	async resume() {
-		if (this.ctx.state !== "running") await this.ctx.resume();
+	async playReference() {
+		await this.resume();
+		this.stop();
+		if (!this.reference) return;
+		this.playingRef = true;
+		const src = this.ctx.createBufferSource();
+		src.buffer = this.reference;
+		src.connect(this.master);
+		src.onended = () => {
+			this.playingRef = false;
+		};
+		src.start();
+		// stash for stop
+		(this as unknown as { _refSrc?: AudioBufferSourceNode })._refSrc = src;
 	}
 
 	private secondsPerStep() {
 		return 60 / this.project.bpm / 4;
 	}
 
-	private scheduleNote(track: TrackPattern, stepIdx: number, time: number) {
-		const cell = asStep(track.steps[stepIdx]);
-		if (!cell.on || track.mute) return;
-		const sample = this.samples.get(track.sampleId);
-		if (!sample) return;
-		const anySolo = this.project.tracks.some((t) => t.solo);
-		if (anySolo && !track.solo) return;
-
+	private scheduleLane(role: VoiceRole, stepIdx: number, time: number) {
+		const lane = this.project.lanes.find((l) => l.role === role);
+		if (!lane || lane.mute || !lane.steps[stepIdx] || !lane.clipId) return;
+		const buf = this.clipBuffers.get(lane.clipId);
+		if (!buf) return;
 		const src = this.ctx.createBufferSource();
-		src.buffer = sample.buffer;
-		src.playbackRate.value = Math.pow(2, (track.pitch + cell.pitch) / 12);
-
-		const filter = this.ctx.createBiquadFilter();
-		filter.type = "lowpass";
-		filter.frequency.value = 300 + track.filter * 12000;
-
-		const gain = this.ctx.createGain();
-		gain.gain.value = track.gain * cell.velocity;
-
-		src.connect(filter);
-		filter.connect(gain);
-		gain.connect(this.master);
-		src.start(time);
-	}
-
-	private playTag(time: number) {
-		if (!this.tagBuffer) return;
-		const src = this.ctx.createBufferSource();
-		src.buffer = this.tagBuffer;
+		src.buffer = buf;
+		src.playbackRate.value = Math.pow(2, lane.pitch / 12);
 		const g = this.ctx.createGain();
-		g.gain.value = 0.95;
+		g.gain.value = lane.gain;
 		src.connect(g);
 		g.connect(this.master);
 		src.start(time);
@@ -161,10 +217,10 @@ export class DawEngine {
 		const total = 16 * this.project.bars;
 		while (this.nextNoteTime < this.ctx.currentTime + lookAhead) {
 			const idx = this.currentStep % 16;
-			const swing = idx % 2 === 1 ? this.project.swing * stepDur * 0.6 : 0;
+			const swing = idx % 2 === 1 ? this.project.swing * stepDur * 0.55 : 0;
 			const t = this.nextNoteTime + swing;
-			for (const track of this.project.tracks) {
-				this.scheduleNote(track, idx, t);
+			for (const lane of this.project.lanes) {
+				this.scheduleLane(lane.role, idx, t);
 			}
 			this.onStep?.(this.currentStep % total);
 			this.nextNoteTime += stepDur;
@@ -173,39 +229,37 @@ export class DawEngine {
 		this.timer = window.setTimeout(this.scheduler, 25);
 	};
 
-	async play() {
+	async playRemake() {
 		await this.resume();
-		if (this.playing) return;
-		await this.loadTag(this.project);
+		this.stop();
 		this.playing = true;
 		this.currentStep = 0;
-		const lead = this.tagBuffer
-			? Math.min(1.1, this.tagBuffer.duration * 0.85)
-			: 0.05;
-		this.nextNoteTime = this.ctx.currentTime + Math.max(0.05, lead);
-		if (this.tagBuffer) this.playTag(this.ctx.currentTime + 0.02);
+		this.nextNoteTime = this.ctx.currentTime + 0.05;
 		this.scheduler();
 	}
 
 	stop() {
 		this.playing = false;
+		this.playingRef = false;
 		if (this.timer != null) clearTimeout(this.timer);
 		this.timer = null;
+		const refSrc = (this as unknown as { _refSrc?: AudioBufferSourceNode })._refSrc;
+		try {
+			refSrc?.stop();
+		} catch {
+			/* */
+		}
 		this.currentStep = 0;
 		this.onStep?.(0);
 	}
 
-	async preview(sampleId: string, pitch = 0, gain = 0.8) {
+	async previewClip(clipId: string) {
 		await this.resume();
-		const sample = this.samples.get(sampleId);
-		if (!sample) return;
+		const buf = this.clipBuffers.get(clipId);
+		if (!buf) return;
 		const src = this.ctx.createBufferSource();
-		src.buffer = sample.buffer;
-		src.playbackRate.value = Math.pow(2, pitch / 12);
-		const g = this.ctx.createGain();
-		g.gain.value = gain;
-		src.connect(g);
-		g.connect(this.master);
+		src.buffer = buf;
+		src.connect(this.master);
 		src.start();
 	}
 
@@ -215,73 +269,39 @@ export class DawEngine {
 	}
 }
 
-export async function renderProjectWav(
-	pack: Pack,
-	projectIn: Project,
-	loops = 2,
-): Promise<Blob> {
+export async function renderRemakeWav(projectIn: Project): Promise<Blob> {
 	const project = normalizeProject(projectIn);
 	const sr = 44100;
 	const stepDur = 60 / project.bpm / 4;
-	const totalSteps = 16 * project.bars * loops;
-
-	let tagBuf: AudioBuffer | null = null;
-	if (project.tagAudio) {
-		try {
-			const tmp = new OfflineAudioContext(1, 1, sr);
-			const bin = Uint8Array.from(atob(project.tagAudio), (c) => c.charCodeAt(0));
-			tagBuf = await tmp.decodeAudioData(bin.buffer.slice(0));
-		} catch {
-			tagBuf = null;
-		}
+	const total = 16 * project.bars * 2;
+	const offline = new OfflineAudioContext(2, Math.ceil(sr * (total * stepDur + 0.5)), sr);
+	const buffers = new Map<string, AudioBuffer>();
+	for (const clip of project.clips) {
+		const buf = await decodeBase64Audio(offline, clip.audioBase64);
+		if (buf) buffers.set(clip.id, buf);
 	}
-	const lead = tagBuf ? Math.min(1.2, tagBuf.duration * 0.9) : 0;
-	const offline = new OfflineAudioContext(
-		2,
-		Math.ceil(sr * (lead + totalSteps * stepDur + 0.5)),
-		sr,
-	);
-	const samples = await loadPackBuffers(offline, pack);
 	const master = offline.createGain();
 	master.gain.value = project.masterGain;
 	master.connect(offline.destination);
 
-	if (tagBuf) {
-		const src = offline.createBufferSource();
-		src.buffer = tagBuf;
-		const g = offline.createGain();
-		g.gain.value = 0.95;
-		src.connect(g);
-		g.connect(master);
-		src.start(0.02);
-	}
-
-	for (let step = 0; step < totalSteps; step++) {
+	for (let step = 0; step < total; step++) {
 		const idx = step % 16;
-		const swing = idx % 2 === 1 ? project.swing * stepDur * 0.6 : 0;
-		const time = lead + step * stepDur + swing;
-		for (const track of project.tracks) {
-			const cell = asStep(track.steps[idx]);
-			if (!cell.on || track.mute) continue;
-			const anySolo = project.tracks.some((t) => t.solo);
-			if (anySolo && !track.solo) continue;
-			const sample = samples.get(track.sampleId);
-			if (!sample) continue;
+		const swing = idx % 2 === 1 ? project.swing * stepDur * 0.55 : 0;
+		const time = step * stepDur + swing;
+		for (const lane of project.lanes) {
+			if (lane.mute || !lane.steps[idx] || !lane.clipId) continue;
+			const buf = buffers.get(lane.clipId);
+			if (!buf) continue;
 			const src = offline.createBufferSource();
-			src.buffer = sample.buffer;
-			src.playbackRate.value = Math.pow(2, (track.pitch + cell.pitch) / 12);
-			const filter = offline.createBiquadFilter();
-			filter.type = "lowpass";
-			filter.frequency.value = 300 + track.filter * 12000;
-			const gain = offline.createGain();
-			gain.gain.value = track.gain * cell.velocity;
-			src.connect(filter);
-			filter.connect(gain);
-			gain.connect(master);
+			src.buffer = buf;
+			src.playbackRate.value = Math.pow(2, lane.pitch / 12);
+			const g = offline.createGain();
+			g.gain.value = lane.gain;
+			src.connect(g);
+			g.connect(master);
 			src.start(time);
 		}
 	}
-
 	const rendered = await offline.startRendering();
 	return audioBufferToWav(rendered);
 }
@@ -321,5 +341,3 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 	}
 	return new Blob([ab], { type: "audio/wav" });
 }
-
-export { stepOn };
