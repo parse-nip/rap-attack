@@ -378,7 +378,7 @@ function CookupView({
 			return;
 		}
 		setSubmitError(null);
-		send({ type: "submit", project });
+		send({ type: "submit", project: normalizeProject(project) });
 	};
 
 	return (
