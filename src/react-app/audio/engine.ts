@@ -1,7 +1,13 @@
-/** Full-featured Web Audio engine for Beat Ranked */
+/** FL-informed Web Audio engine — pattern/song, graph params, mixer inserts */
 
-import type { Pack, Project, SampleDef, StepCell, TrackPattern } from "../../shared/types";
-import { asStep, normalizeProject, stepOn } from "../../shared/types";
+import type {
+	Channel,
+	Pack,
+	Project,
+	SampleDef,
+	StepCell,
+} from "../../shared/types";
+import { asStep, normalizeProject, songLengthBars } from "../../shared/types";
 
 export type LoadedSample = {
 	def: SampleDef;
@@ -26,53 +32,52 @@ export function synthesizeSample(
 	const len = Math.ceil(sr * dur);
 	const buffer = ctx.createBuffer(1, len, sr);
 	const data = buffer.getChannelData(0);
-	const baseMidi = def.rootMidi + (def.pitch - 0.5) * 4;
-	const freq = midiToHz(baseMidi);
+	const freq = midiToHz(def.rootMidi + (def.pitch - 0.5) * 4);
 
 	for (let i = 0; i < len; i++) {
 		const t = i / sr;
 		const env = Math.exp(-t * (1.15 + (1 - def.decay) * 10));
 		let sig = 0;
-
 		if (def.role === "kick") {
 			const f = freq * (1 + Math.exp(-t * 35) * 3.2);
 			sig = Math.sin(2 * Math.PI * f * t) * env;
 			sig += (Math.random() * 2 - 1) * 0.04 * Math.exp(-t * 90);
 		} else if (def.role === "snare") {
-			const tone = Math.sin(2 * Math.PI * 180 * t) * env * (1 - def.noise * 0.6);
-			const noise = (Math.random() * 2 - 1) * Math.exp(-t * (10 + def.tone * 18));
-			sig = tone + noise * (0.45 + def.noise * 0.5);
+			sig =
+				Math.sin(2 * Math.PI * 180 * t) * env * (1 - def.noise * 0.6) +
+				(Math.random() * 2 - 1) *
+					Math.exp(-t * (10 + def.tone * 18)) *
+					(0.45 + def.noise * 0.5);
 		} else if (def.role === "hat") {
 			sig =
 				(Math.random() * 2 - 1) *
-				Math.exp(-t * (22 + (1 - def.decay) * 55)) *
-				(0.55 + def.noise * 0.4);
-			sig += Math.sin(2 * Math.PI * (7000 + def.tone * 3500) * t) * env * 0.12;
+					Math.exp(-t * (22 + (1 - def.decay) * 55)) *
+					(0.55 + def.noise * 0.4) +
+				Math.sin(2 * Math.PI * (7000 + def.tone * 3500) * t) * env * 0.12;
 		} else if (def.role === "bass") {
 			sig = Math.sin(2 * Math.PI * freq * t) * env;
 			sig += Math.sin(2 * Math.PI * freq * 2 * t) * env * def.harmonics * 0.35;
-			sig += Math.sin(2 * Math.PI * freq * 3 * t) * env * def.harmonics * 0.12;
 			sig = Math.tanh(sig * (1.4 + def.drive * 3));
 		} else if (def.role === "melody" || def.role === "vocal") {
 			const partials = 1 + Math.floor(def.harmonics * 4);
 			for (let h = 1; h <= partials; h++) {
-				sig += Math.sin(2 * Math.PI * freq * h * t) * ((1 / h) * Math.pow(0.85, h - 1));
+				sig +=
+					Math.sin(2 * Math.PI * freq * h * t) *
+					((1 / h) * Math.pow(0.85, h - 1));
 			}
 			sig *= env * (0.75 + def.tone * 0.25);
 			if (def.role === "vocal") {
 				sig *= 0.75 + 0.25 * Math.sin(2 * Math.PI * (4.5 + def.tone * 3) * t);
 			}
 		} else if (def.role === "fx") {
-			const sweep = freq * (1 + t * (1.5 + def.pitch * 4));
-			sig = Math.sin(2 * Math.PI * sweep * t) * env;
+			sig =
+				Math.sin(2 * Math.PI * freq * (1 + t * (1.5 + def.pitch * 4)) * t) * env;
 			sig += (Math.random() * 2 - 1) * env * def.noise * 0.4;
 		} else {
 			sig = Math.sin(2 * Math.PI * freq * t) * env * (1 - def.noise * 0.4);
 			sig += (Math.random() * 2 - 1) * Math.exp(-t * 28) * def.noise;
 		}
-
-		sig = Math.tanh(sig * (1 + def.drive * 2.5));
-		data[i] = sig * 0.9;
+		data[i] = Math.tanh(sig * (1 + def.drive * 2.5)) * 0.9;
 	}
 	return buffer;
 }
@@ -87,7 +92,7 @@ function reverseBuffer(ctx: BaseAudioContext, src: AudioBuffer): AudioBuffer {
 	return out;
 }
 
-function makeImpulse(ctx: BaseAudioContext, seconds: number, decay: number): AudioBuffer {
+function makeImpulse(ctx: BaseAudioContext, seconds: number, decay: number) {
 	const rate = ctx.sampleRate;
 	const len = Math.floor(rate * seconds);
 	const impulse = ctx.createBuffer(2, len, rate);
@@ -111,10 +116,7 @@ function makeDistortionCurve(amount: number): Float32Array<ArrayBuffer> {
 	return curve;
 }
 
-export async function loadPackBuffers(
-	ctx: BaseAudioContext,
-	pack: Pack,
-): Promise<Map<string, LoadedSample>> {
+export async function loadPackBuffers(ctx: BaseAudioContext, pack: Pack) {
 	const map = new Map<string, LoadedSample>();
 	for (const def of pack.samples) {
 		map.set(def.id, { def, buffer: synthesizeSample(ctx, def) });
@@ -122,15 +124,20 @@ export async function loadPackBuffers(
 	return map;
 }
 
-type Bus = {
-	input: GainNode;
-	pan: StereoPannerNode;
-	filter: BiquadFilterNode;
-	drive: WaveShaperNode;
-	dry: GainNode;
-	reverbSend: GainNode;
-	delaySend: GainNode;
-};
+/** Resolve which pattern/step plays at a global song step */
+export function resolveSongStep(
+	project: Project,
+	globalStep: number,
+): { patternIndex: number; stepInPattern: number } | null {
+	const plen = project.patternLength;
+	const globalBar = Math.floor(globalStep / plen);
+	const stepInBar = globalStep % plen;
+	const clip = project.playlist.find(
+		(c) => globalBar >= c.startBar && globalBar < c.startBar + c.lengthBars,
+	);
+	if (!clip) return null;
+	return { patternIndex: clip.patternIndex, stepInPattern: stepInBar };
+}
 
 export class DawEngine {
 	ctx: AudioContext;
@@ -150,8 +157,7 @@ export class DawEngine {
 	private currentStep = 0;
 	playing = false;
 	project: Project;
-	onStep?: (step: number) => void;
-	onMeter?: (levels: number[]) => void;
+	onStep?: (step: number, meta?: { patternIndex: number }) => void;
 
 	constructor(project: Project) {
 		this.ctx = new AudioContext();
@@ -175,27 +181,23 @@ export class DawEngine {
 		this.reverb = this.ctx.createConvolver();
 		this.reverb.buffer = makeImpulse(this.ctx, 1.6, 2.4);
 		this.reverbGain = this.ctx.createGain();
-		this.reverbGain.gain.value = 0.14;
 
 		this.delay = this.ctx.createDelay(1.0);
-		this.delay.delayTime.value = 0.22;
 		this.delayFeedback = this.ctx.createGain();
 		this.delayFeedback.gain.value = 0.28;
 		this.delayGain = this.ctx.createGain();
-		this.delayGain.gain.value = 0.2;
 		this.delay.connect(this.delayFeedback);
 		this.delayFeedback.connect(this.delay);
 		this.delay.connect(this.delayGain);
 
-		// master chain
 		this.master.connect(this.crush);
 		this.crush.connect(this.masterFilter);
 		this.masterFilter.connect(this.compressor);
 		this.compressor.connect(this.ctx.destination);
-
 		this.reverb.connect(this.reverbGain);
 		this.reverbGain.connect(this.compressor);
 		this.delayGain.connect(this.compressor);
+		this.applyMaster();
 	}
 
 	private applyMaster() {
@@ -204,7 +206,6 @@ export class DawEngine {
 		const crush = this.project.masterCrush ?? 0;
 		this.crush.curve = makeDistortionCurve(0.1 + crush * 120);
 		this.masterFilter.frequency.value = 18000 - crush * 9000;
-		// sync delay time to dotted 8th-ish from BPM
 		const beat = 60 / Math.max(60, this.project.bpm);
 		this.delay.delayTime.value = beat * 0.75;
 	}
@@ -236,112 +237,135 @@ export class DawEngine {
 		if (this.ctx.state !== "running") await this.ctx.resume();
 	}
 
-	private secondsPerStep(): number {
+	private secondsPerStep() {
 		return 60 / this.project.bpm / 4;
 	}
 
-	private makeBus(track: TrackPattern): Bus {
-		const input = this.ctx.createGain();
-		const filter = this.ctx.createBiquadFilter();
-		filter.type = "lowpass";
-		filter.frequency.value = 280 + track.filter * 14000;
-		filter.Q.value = 0.7;
-
-		const drive = this.ctx.createWaveShaper();
-		drive.curve = makeDistortionCurve(Math.max(0.5, track.drive * 90));
-		drive.oversample = "2x";
-
-		const pan = this.ctx.createStereoPanner();
-		pan.pan.value = Math.max(-1, Math.min(1, track.pan));
-
-		const dry = this.ctx.createGain();
-		dry.gain.value = 1;
-
-		const reverbSend = this.ctx.createGain();
-		reverbSend.gain.value = track.reverb;
-
-		const delaySend = this.ctx.createGain();
-		delaySend.gain.value = track.delay;
-
-		input.connect(filter);
-		filter.connect(drive);
-		drive.connect(pan);
-		pan.connect(dry);
-		pan.connect(reverbSend);
-		pan.connect(delaySend);
-		dry.connect(this.master);
-		reverbSend.connect(this.reverb);
-		delaySend.connect(this.delay);
-
-		return { input, pan, filter, drive, dry, reverbSend, delaySend };
-	}
-
-	private playTag(time: number) {
-		if (!this.tagBuffer) return;
-		const src = this.ctx.createBufferSource();
-		src.buffer = this.tagBuffer;
-		const g = this.ctx.createGain();
-		g.gain.value = 0.95;
-		src.connect(g);
-		g.connect(this.master);
-		src.start(time);
-	}
-
 	private scheduleHit(
-		track: TrackPattern,
+		ch: Channel,
 		cell: StepCell,
 		time: number,
 		stepDur: number,
 	) {
-		const sample = this.samples.get(track.sampleId);
-		if (!sample || track.mute) return;
-		const anySolo = this.project.tracks.some((t) => t.solo);
-		if (anySolo && !track.solo) return;
+		const sample = this.samples.get(ch.sampleId);
+		if (!sample || ch.mute) return;
+		const anySolo = this.project.channels.some((c) => c.solo);
+		if (anySolo && !ch.solo) return;
 
-		const bus = this.makeBus(track);
 		const src = this.ctx.createBufferSource();
-		let buf = sample.buffer;
-		if (track.reverse) buf = reverseBuffer(this.ctx, buf);
-		src.buffer = buf;
+		src.buffer = ch.reverse
+			? reverseBuffer(this.ctx, sample.buffer)
+			: sample.buffer;
+		src.playbackRate.value = Math.pow(2, (ch.pitch + cell.pitch) / 12);
 
-		const totalPitch = track.pitch + cell.pitch;
-		src.playbackRate.value = Math.pow(2, totalPitch / 12);
+		const filter = this.ctx.createBiquadFilter();
+		filter.type = "lowpass";
+		filter.frequency.value = 280 + ch.filter * 14000;
 
-		const vel = cell.velocity;
-		bus.input.gain.value = track.gain * vel;
+		const low = this.ctx.createBiquadFilter();
+		low.type = "lowshelf";
+		low.frequency.value = 180;
+		low.gain.value = ch.eqLow * 12;
 
-		// Gate / length envelope
+		const mid = this.ctx.createBiquadFilter();
+		mid.type = "peaking";
+		mid.frequency.value = 1000;
+		mid.Q.value = 0.9;
+		mid.gain.value = ch.eqMid * 10;
+
+		const high = this.ctx.createBiquadFilter();
+		high.type = "highshelf";
+		high.frequency.value = 4500;
+		high.gain.value = ch.eqHigh * 10;
+
+		const drive = this.ctx.createWaveShaper();
+		drive.curve = makeDistortionCurve(Math.max(0.5, ch.drive * 90 + ch.compress * 40));
+
+		const pan = this.ctx.createStereoPanner();
+		pan.pan.value = Math.max(-1, Math.min(1, ch.pan + cell.stepPan));
+
+		const dry = this.ctx.createGain();
+		const amp = this.ctx.createGain();
+		amp.gain.value = ch.gain * cell.velocity * (1 - ch.compress * 0.15);
+
+		const reverbSend = this.ctx.createGain();
+		reverbSend.gain.value = ch.reverb;
+		const delaySend = this.ctx.createGain();
+		delaySend.gain.value = ch.delay;
+
 		const gate = Math.max(0.04, cell.length * stepDur * 0.92);
-		const g = this.ctx.createGain();
-		g.gain.setValueAtTime(1, time);
-		g.gain.setValueAtTime(1, time + gate * 0.75);
-		g.gain.exponentialRampToValueAtTime(0.001, time + gate);
+		const env = this.ctx.createGain();
+		env.gain.setValueAtTime(1, time);
+		env.gain.setValueAtTime(1, time + gate * 0.75);
+		env.gain.exponentialRampToValueAtTime(0.001, time + gate);
 
-		src.connect(g);
-		g.connect(bus.input);
+		src.connect(env);
+		env.connect(filter);
+		filter.connect(low);
+		low.connect(mid);
+		mid.connect(high);
+		high.connect(drive);
+		drive.connect(pan);
+		pan.connect(amp);
+		amp.connect(dry);
+		dry.connect(this.master);
+		pan.connect(reverbSend);
+		pan.connect(delaySend);
+		reverbSend.connect(this.reverb);
+		delaySend.connect(this.delay);
+
 		src.start(time);
 		src.stop(time + gate + 0.05);
+	}
+
+	private lookUp(step: number): {
+		patternIndex: number;
+		stepInPattern: number;
+	} | null {
+		if (this.project.playMode === "pattern") {
+			return {
+				patternIndex: this.project.activePattern,
+				stepInPattern: step % this.project.patternLength,
+			};
+		}
+		return resolveSongStep(this.project, step);
+	}
+
+	private loopLength(): number {
+		if (this.project.playMode === "pattern") return this.project.patternLength;
+		return songLengthBars(this.project) * this.project.patternLength;
 	}
 
 	private scheduler = () => {
 		const lookAhead = 0.12;
 		const stepDur = this.secondsPerStep();
-		const totalSteps = 16 * this.project.bars;
+		const loopLen = Math.max(1, this.loopLength());
 
 		while (this.nextNoteTime < this.ctx.currentTime + lookAhead) {
-			const stepInBar = this.currentStep % 16;
+			const lookup = this.lookUp(this.currentStep);
+			const stepInPat = lookup?.stepInPattern ?? 0;
 			const swing =
-				stepInBar % 2 === 1 ? this.project.swing * stepDur * 0.65 : 0;
+				stepInPat % 2 === 1 ? this.project.swing * stepDur * 0.65 : 0;
 			const t = this.nextNoteTime + swing;
 
-			for (const track of this.project.tracks) {
-				const cell = asStep(track.steps[stepInBar]);
-				if (cell.on) this.scheduleHit(track, cell, t, stepDur);
+			if (lookup) {
+				const pat = this.project.patterns[lookup.patternIndex];
+				if (pat) {
+					for (let ci = 0; ci < this.project.channels.length; ci++) {
+						const ch = this.project.channels[ci]!;
+						const cell = asStep(pat.tracks[ci]?.steps[lookup.stepInPattern]);
+						if (cell.on) this.scheduleHit(ch, cell, t, stepDur);
+					}
+				}
+				this.onStep?.(this.currentStep % loopLen, {
+					patternIndex: lookup.patternIndex,
+				});
+			} else {
+				this.onStep?.(this.currentStep % loopLen);
 			}
 
-			this.onStep?.(this.currentStep % totalSteps);
 			this.nextNoteTime += stepDur;
-			this.currentStep = (this.currentStep + 1) % totalSteps;
+			this.currentStep = (this.currentStep + 1) % loopLen;
 		}
 		this.timer = window.setTimeout(this.scheduler, 25);
 	};
@@ -357,10 +381,19 @@ export class DawEngine {
 			? Math.min(1.15, this.tagBuffer.duration * 0.85)
 			: 0.05;
 		this.nextNoteTime = this.ctx.currentTime + Math.max(0.05, lead);
-		if (this.tagBuffer) {
-			this.playTag(this.ctx.currentTime + 0.02);
-		}
+		if (this.tagBuffer) this.playTag(this.ctx.currentTime + 0.02);
 		this.scheduler();
+	}
+
+	private playTag(time: number) {
+		if (!this.tagBuffer) return;
+		const src = this.ctx.createBufferSource();
+		src.buffer = this.tagBuffer;
+		const g = this.ctx.createGain();
+		g.gain.value = 0.95;
+		src.connect(g);
+		g.connect(this.master);
+		src.start(time);
 	}
 
 	stop() {
@@ -377,14 +410,11 @@ export class DawEngine {
 		sampleId: string,
 		pitch = 0,
 		gain = 0.8,
-		opts?: { reverse?: boolean; filter?: number; drive?: number; pan?: number },
+		opts?: Partial<Channel>,
 	) {
 		await this.resume();
-		const sample = this.samples.get(sampleId);
-		if (!sample) return;
-		const fake: TrackPattern = {
+		const ch: Channel = {
 			sampleId,
-			steps: [],
 			gain,
 			mute: false,
 			solo: false,
@@ -392,22 +422,20 @@ export class DawEngine {
 			filter: opts?.filter ?? 0.75,
 			drive: opts?.drive ?? 0.1,
 			pan: opts?.pan ?? 0,
-			reverb: 0.08,
-			delay: 0,
+			reverb: opts?.reverb ?? 0.08,
+			delay: opts?.delay ?? 0,
 			reverse: !!opts?.reverse,
+			eqLow: opts?.eqLow ?? 0,
+			eqMid: opts?.eqMid ?? 0,
+			eqHigh: opts?.eqHigh ?? 0,
+			compress: opts?.compress ?? 0,
 		};
-		this.scheduleHit(fake, asStep({ on: true, velocity: 1, pitch: 0, length: 2 }), this.ctx.currentTime, this.secondsPerStep());
-	}
-
-	async previewTag() {
-		await this.resume();
-		await this.loadTag(this.project);
-		if (!this.tagBuffer) return;
-		this.playTag(this.ctx.currentTime);
-	}
-
-	getSampleBuffer(sampleId: string): AudioBuffer | null {
-		return this.samples.get(sampleId)?.buffer ?? null;
+		this.scheduleHit(
+			ch,
+			asStep({ on: true, velocity: 1, pitch: 0, length: 2, stepPan: 0 }),
+			this.ctx.currentTime,
+			this.secondsPerStep(),
+		);
 	}
 
 	dispose() {
@@ -419,12 +447,18 @@ export class DawEngine {
 export async function renderProjectWav(
 	pack: Pack,
 	projectIn: Project,
-	loops = 2,
+	loops = 1,
 ): Promise<Blob> {
 	const project = normalizeProject(projectIn);
+	const engine = new DawEngine(project);
+	// Offline path: schedule via OfflineAudioContext manually
 	const sr = 44100;
 	const stepDur = 60 / project.bpm / 4;
-	const totalSteps = 16 * project.bars * loops;
+	const loopLen =
+		project.playMode === "song"
+			? songLengthBars(project) * project.patternLength
+			: project.patternLength;
+	const totalSteps = loopLen * loops;
 
 	let tagBuf: AudioBuffer | null = null;
 	if (project.tagAudio) {
@@ -436,7 +470,6 @@ export async function renderProjectWav(
 			tagBuf = null;
 		}
 	}
-
 	const lead = tagBuf ? Math.min(1.2, tagBuf.duration * 0.9) : 0;
 	const duration = lead + totalSteps * stepDur + 1.0;
 	const offline = new OfflineAudioContext(2, Math.ceil(sr * duration), sr);
@@ -449,7 +482,6 @@ export async function renderProjectWav(
 	comp.ratio.value = 3.5;
 	master.connect(comp);
 	comp.connect(offline.destination);
-
 	const reverb = offline.createConvolver();
 	reverb.buffer = makeImpulse(offline, 1.4, 2.2);
 	const reverbGain = offline.createGain();
@@ -467,42 +499,50 @@ export async function renderProjectWav(
 		src.start(0.02);
 	}
 
+	const lookUp = (step: number) => {
+		if (project.playMode === "pattern") {
+			return {
+				patternIndex: project.activePattern,
+				stepInPattern: step % project.patternLength,
+			};
+		}
+		return resolveSongStep(project, step % loopLen);
+	};
+
 	for (let step = 0; step < totalSteps; step++) {
-		const stepInBar = step % 16;
-		const swing = stepInBar % 2 === 1 ? project.swing * stepDur * 0.65 : 0;
+		const lookup = lookUp(step);
+		if (!lookup) continue;
+		const stepInPat = lookup.stepInPattern;
+		const swing = stepInPat % 2 === 1 ? project.swing * stepDur * 0.65 : 0;
 		const time = lead + step * stepDur + swing;
-
-		for (const track of project.tracks) {
-			const cell = asStep(track.steps[stepInBar]);
-			if (!cell.on || track.mute) continue;
-			const anySolo = project.tracks.some((t) => t.solo);
-			if (anySolo && !track.solo) continue;
-			const sample = samples.get(track.sampleId);
+		const pat = project.patterns[lookup.patternIndex];
+		if (!pat) continue;
+		for (let ci = 0; ci < project.channels.length; ci++) {
+			const ch = project.channels[ci]!;
+			const cell = asStep(pat.tracks[ci]?.steps[stepInPat]);
+			if (!cell.on || ch.mute) continue;
+			const anySolo = project.channels.some((c) => c.solo);
+			if (anySolo && !ch.solo) continue;
+			const sample = samples.get(ch.sampleId);
 			if (!sample) continue;
-
 			const src = offline.createBufferSource();
-			src.buffer = track.reverse ? reverseBuffer(offline, sample.buffer) : sample.buffer;
-			src.playbackRate.value = Math.pow(2, (track.pitch + cell.pitch) / 12);
-
+			src.buffer = ch.reverse
+				? reverseBuffer(offline, sample.buffer)
+				: sample.buffer;
+			src.playbackRate.value = Math.pow(2, (ch.pitch + cell.pitch) / 12);
 			const filter = offline.createBiquadFilter();
 			filter.type = "lowpass";
-			filter.frequency.value = 280 + track.filter * 14000;
-
+			filter.frequency.value = 280 + ch.filter * 14000;
 			const pan = offline.createStereoPanner();
-			pan.pan.value = track.pan;
-
+			pan.pan.value = Math.max(-1, Math.min(1, ch.pan + cell.stepPan));
 			const gain = offline.createGain();
-			gain.gain.value = track.gain * cell.velocity;
-
+			gain.gain.value = ch.gain * cell.velocity;
 			const gate = Math.max(0.04, cell.length * stepDur * 0.92);
 			const env = offline.createGain();
 			env.gain.setValueAtTime(1, time);
-			env.gain.setValueAtTime(1, time + gate * 0.75);
 			env.gain.exponentialRampToValueAtTime(0.001, time + gate);
-
 			const revSend = offline.createGain();
-			revSend.gain.value = track.reverb;
-
+			revSend.gain.value = ch.reverb;
 			src.connect(env);
 			env.connect(filter);
 			filter.connect(pan);
@@ -515,6 +555,7 @@ export async function renderProjectWav(
 		}
 	}
 
+	engine.dispose();
 	const rendered = await offline.startRendering();
 	return audioBufferToWav(rendered);
 }
@@ -522,10 +563,8 @@ export async function renderProjectWav(
 function audioBufferToWav(buffer: AudioBuffer): Blob {
 	const numChan = buffer.numberOfChannels;
 	const sr = buffer.sampleRate;
-	const bitDepth = 16;
 	const samples = buffer.length;
-	const blockAlign = (numChan * bitDepth) / 8;
-	const byteRate = sr * blockAlign;
+	const blockAlign = (numChan * 16) / 8;
 	const dataSize = samples * blockAlign;
 	const ab = new ArrayBuffer(44 + dataSize);
 	const view = new DataView(ab);
@@ -540,9 +579,9 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 	view.setUint16(20, 1, true);
 	view.setUint16(22, numChan, true);
 	view.setUint32(24, sr, true);
-	view.setUint32(28, byteRate, true);
+	view.setUint32(28, sr * blockAlign, true);
 	view.setUint16(32, blockAlign, true);
-	view.setUint16(34, bitDepth, true);
+	view.setUint16(34, 16, true);
 	writeStr(36, "data");
 	view.setUint32(40, dataSize, true);
 	let offset = 44;
@@ -557,5 +596,3 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 	}
 	return new Blob([ab], { type: "audio/wav" });
 }
-
-export { stepOn };

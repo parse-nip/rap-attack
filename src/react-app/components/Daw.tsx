@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Pack, Project, StepCell, TrackPattern } from "../../shared/types";
+import type {
+	Channel,
+	Pack,
+	PlaylistClip,
+	Project,
+	StepCell,
+} from "../../shared/types";
 import {
+	PATTERN_COUNT,
 	asStep,
 	emptyStep,
 	hitStep,
 	normalizeProject,
+	songLengthBars,
 	stepOn,
 } from "../../shared/types";
 import { DawEngine, renderProjectWav } from "../audio/engine";
@@ -16,8 +24,8 @@ type Props = {
 	locked?: boolean;
 };
 
-type View = "seq" | "keys" | "mixer" | "pads";
-type Tool = "draw" | "erase" | "velo" | "pitch";
+type Panel = "rack" | "keys" | "playlist" | "mixer";
+type GraphParam = "velocity" | "pitch" | "stepPan";
 
 export const ROLE_COLOR: Record<string, string> = {
 	kick: "#ff6b2c",
@@ -31,7 +39,7 @@ export const ROLE_COLOR: Record<string, string> = {
 };
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-const PIANO_RANGE = 24; // 2 octaves
+const PIANO_RANGE = 24;
 
 function midiLabel(midi: number) {
 	const n = ((midi % 12) + 12) % 12;
@@ -39,34 +47,36 @@ function midiLabel(midi: number) {
 	return `${NOTE_NAMES[n]}${oct}`;
 }
 
-export function Daw({ pack, project: rawProject, onChange, locked }: Props) {
-	const project = useMemo(() => normalizeProject(rawProject), [rawProject]);
+export function Daw({ pack, project: raw, onChange, locked }: Props) {
+	const project = useMemo(() => normalizeProject(raw), [raw]);
 	const engineRef = useRef<DawEngine | null>(null);
-	if (engineRef.current == null) engineRef.current = new DawEngine(project);
+	if (!engineRef.current) engineRef.current = new DawEngine(project);
 	const engine = engineRef.current;
 
 	const [playing, setPlaying] = useState(false);
 	const [step, setStep] = useState(0);
 	const [ready, setReady] = useState(false);
 	const [selected, setSelected] = useState(0);
-	const [view, setView] = useState<View>("seq");
-	const [tool, setTool] = useState<Tool>("draw");
-	const [paintVel, setPaintVel] = useState(0.85);
+	const [panel, setPanel] = useState<Panel>("rack");
+	const [graph, setGraph] = useState<GraphParam>("velocity");
+	const [graphOpen, setGraphOpen] = useState(true);
+	const [paintVel] = useState(0.9);
 	const [noteLen, setNoteLen] = useState(1);
 	const [octave, setOctave] = useState(0);
 	const history = useRef<Project[]>([]);
 	const future = useRef<Project[]>([]);
-	const clipRef = useRef<StepCell[] | null>(null);
+
+	const sampleById = useMemo(
+		() => new Map(pack.samples.map((s) => [s.id, s])),
+		[pack],
+	);
 
 	const commit = useCallback(
-		(next: Project, pushHist = true) => {
+		(next: Project) => {
 			if (locked) return;
-			const norm = normalizeProject(next);
-			if (pushHist) {
-				history.current = [...history.current.slice(-40), project];
-				future.current = [];
-			}
-			onChange(norm);
+			history.current = [...history.current.slice(-50), project];
+			future.current = [];
+			onChange(normalizeProject(next));
 		},
 		[locked, onChange, project],
 	);
@@ -118,84 +128,61 @@ export function Daw({ pack, project: rawProject, onChange, locked }: Props) {
 				void togglePlay();
 			} else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
 				e.preventDefault();
-				if (e.shiftKey) redo();
-				else undo();
-			} else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "y") {
+				e.shiftKey ? redo() : undo();
+			} else if (e.key === "Tab") {
 				e.preventDefault();
-				redo();
-			} else if (e.key === "1") setView("seq");
-			else if (e.key === "2") setView("keys");
-			else if (e.key === "3") setView("mixer");
-			else if (e.key === "4") setView("pads");
-			else if (e.key.toLowerCase() === "d") setTool("draw");
-			else if (e.key.toLowerCase() === "e") setTool("erase");
-			else if (e.key.toLowerCase() === "v") setTool("velo");
-			else if (e.key.toLowerCase() === "p") setTool("pitch");
-			else if (/^[a-z]$/i.test(e.key) && view === "pads") {
-				const map = "qwerasdf";
-				const idx = map.indexOf(e.key.toLowerCase());
-				if (idx >= 0 && project.tracks[idx]) {
-					const t = project.tracks[idx]!;
-					void engine.preview(t.sampleId, t.pitch + octave * 12, t.gain, {
-						filter: t.filter,
-						drive: t.drive,
-						pan: t.pan,
-						reverse: t.reverse,
-					});
-				}
+				commit({
+					...project,
+					playMode: project.playMode === "pattern" ? "song" : "pattern",
+				});
+			} else if (e.key === "F6" || e.key === "1") setPanel("rack");
+			else if (e.key === "F7" || e.key === "2") setPanel("keys");
+			else if (e.key === "F5" || e.key === "3") setPanel("playlist");
+			else if (e.key === "F9" || e.key === "4") setPanel("mixer");
+			else if (e.key === "]" || e.key === "[") {
+				const dir = e.key === "]" ? 1 : -1;
+				commit({
+					...project,
+					activePattern:
+						(project.activePattern + dir + PATTERN_COUNT) % PATTERN_COUNT,
+				});
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [locked, project, view, playing, ready, octave]);
+	}, [locked, project, playing, ready]);
 
-	const sampleById = useMemo(() => {
-		return new Map(pack.samples.map((s) => [s.id, s]));
-	}, [pack]);
-
-	const updateTrack = (idx: number, patch: Partial<TrackPattern>) => {
+	const updateChannel = (idx: number, patch: Partial<Channel>) => {
 		commit({
 			...project,
-			tracks: project.tracks.map((t, i) => (i === idx ? { ...t, ...patch } : t)),
+			channels: project.channels.map((c, i) =>
+				i === idx ? { ...c, ...patch } : c,
+			),
 		});
 	};
 
-	const setCell = (trackIdx: number, stepIdx: number, cell: StepCell) => {
-		const tracks = project.tracks.map((t, i) => {
-			if (i !== trackIdx) return t;
-			const steps = t.steps.map((s, si) => (si === stepIdx ? cell : asStep(s)));
-			return { ...t, steps };
+	const setCell = (chIdx: number, stepIdx: number, cell: StepCell) => {
+		const patterns = project.patterns.map((p, pi) => {
+			if (pi !== project.activePattern) return p;
+			return {
+				...p,
+				tracks: p.tracks.map((t, ti) => {
+					if (ti !== chIdx) return t;
+					const steps = t.steps.map((s, si) => (si === stepIdx ? cell : asStep(s)));
+					return { ...t, steps };
+				}),
+			};
 		});
-		commit({ ...project, tracks });
+		commit({ ...project, patterns });
 	};
 
-	const paintStep = (trackIdx: number, stepIdx: number, pitchOverride?: number) => {
-		if (locked) return;
-		const cur = asStep(project.tracks[trackIdx]?.steps[stepIdx]);
-		if (tool === "erase") {
-			setCell(trackIdx, stepIdx, emptyStep());
-			return;
-		}
-		if (tool === "velo") {
-			if (!cur.on) return;
-			setCell(trackIdx, stepIdx, { ...cur, velocity: paintVel });
-			return;
-		}
-		if (tool === "pitch") {
-			if (!cur.on) return;
-			setCell(trackIdx, stepIdx, {
-				...cur,
-				pitch: pitchOverride ?? Math.max(-12, Math.min(12, cur.pitch + 1)),
-			});
-			return;
-		}
-		// draw
-		setCell(
-			trackIdx,
-			stepIdx,
-			hitStep(paintVel, pitchOverride ?? cur.pitch, noteLen),
+	const toggleStep = (chIdx: number, stepIdx: number) => {
+		const cur = asStep(
+			project.patterns[project.activePattern]?.tracks[chIdx]?.steps[stepIdx],
 		);
+		if (cur.on) setCell(chIdx, stepIdx, emptyStep());
+		else setCell(chIdx, stepIdx, hitStep(paintVel, cur.pitch, noteLen, cur.stepPan));
 	};
 
 	const togglePlay = async () => {
@@ -210,69 +197,108 @@ export function Daw({ pack, project: rawProject, onChange, locked }: Props) {
 	};
 
 	const download = async () => {
-		const blob = await renderProjectWav(pack, project, 2);
-		const url = URL.createObjectURL(blob);
+		const blob = await renderProjectWav(pack, project, 1);
 		const a = document.createElement("a");
-		a.href = url;
-		a.download = `beat-battle-${pack.genre}-${pack.seed}.wav`;
+		a.href = URL.createObjectURL(blob);
+		a.download = `beat-ranked-${pack.genre}-${pack.seed}.wav`;
 		a.click();
-		URL.revokeObjectURL(url);
 	};
 
-	const clearTrack = (idx: number) => {
-		updateTrack(idx, {
-			steps: Array.from({ length: 16 }, () => emptyStep()),
+	const activePat = project.patterns[project.activePattern]!;
+	const channel = project.channels[selected];
+	const sample = channel ? sampleById.get(channel.sampleId) : null;
+	const songBars = songLengthBars(project);
+
+	const addClip = (patternIndex: number) => {
+		const startBar = songBars;
+		const clip: PlaylistClip = {
+			id: `c${Date.now().toString(36)}`,
+			patternIndex,
+			startBar,
+			lengthBars: 1,
+		};
+		commit({ ...project, playlist: [...project.playlist, clip], playMode: "song" });
+	};
+
+	const stampScale = (chIdx: number) => {
+		// FL-ish stamp: place a simple scale phrase on empty-ish melody channel
+		const degrees = [0, 2, 4, 5, 7, 9, 11, 12];
+		const patterns = project.patterns.map((p, pi) => {
+			if (pi !== project.activePattern) return p;
+			return {
+				...p,
+				tracks: p.tracks.map((t, ti) => {
+					if (ti !== chIdx) return t;
+					const steps = t.steps.map((s, si) => {
+						if (si % 2 !== 0) return asStep(s);
+						return hitStep(0.8, degrees[(si / 2) % degrees.length]!, 2);
+					});
+					return { ...t, steps };
+				}),
+			};
 		});
+		commit({ ...project, patterns });
 	};
-
-	const randomizeTrack = (idx: number) => {
-		const role = sampleById.get(project.tracks[idx]!.sampleId)?.role;
-		const dens = role === "hat" ? 0.55 : role === "kick" ? 0.28 : 0.22;
-		const steps = Array.from({ length: 16 }, () => {
-			if (Math.random() > dens) return emptyStep();
-			const vel = 0.55 + Math.random() * 0.45;
-			const pitch =
-				role === "melody" || role === "bass"
-					? [0, 3, 5, 7, -2, 12][Math.floor(Math.random() * 6)]!
-					: 0;
-			return hitStep(vel, pitch, role === "bass" ? 2 : 1);
-		});
-		// force a downbeat sometimes
-		if (!stepOn(steps[0]) && (role === "kick" || role === "bass")) {
-			steps[0] = hitStep(0.95, 0, 2);
-		}
-		updateTrack(idx, { steps });
-	};
-
-	const copyTrack = (idx: number) => {
-		clipRef.current = project.tracks[idx]!.steps.map((s) => asStep(s));
-	};
-	const pasteTrack = (idx: number) => {
-		if (!clipRef.current) return;
-		updateTrack(idx, { steps: clipRef.current.map((s) => ({ ...s })) });
-	};
-
-	const doublePattern = () => {
-		commit({ ...project, bars: Math.min(8, project.bars * 2) });
-	};
-
-	const track = project.tracks[selected];
-	const sample = track ? sampleById.get(track.sampleId) : null;
-	const keyRoot = sample?.rootMidi ?? pack.keyMidi;
 
 	return (
-		<div className="daw daw-pro">
-			{/* Transport */}
-			<div className="daw-transport">
+		<div className="fl-daw">
+			{/* FL-style transport */}
+			<div className="fl-transport">
+				<button
+					type="button"
+					className={`fl-pat-song ${project.playMode === "pattern" ? "pat" : "song"}`}
+					disabled={locked}
+					onClick={() =>
+						commit({
+							...project,
+							playMode: project.playMode === "pattern" ? "song" : "pattern",
+						})
+					}
+					title="Tab toggles Pat/Song"
+				>
+					{project.playMode === "pattern" ? "PAT" : "SONG"}
+				</button>
 				<button
 					type="button"
 					className={`btn play ${playing ? "active" : ""}`}
-					onClick={() => void togglePlay()}
 					disabled={!ready}
-					title="Space"
+					onClick={() => void togglePlay()}
 				>
 					{playing ? "Stop" : "Play"}
 				</button>
+				<div className="fl-pattern-sel">
+					<button
+						type="button"
+						className="mini"
+						disabled={locked}
+						onClick={() =>
+							commit({
+								...project,
+								activePattern:
+									(project.activePattern - 1 + PATTERN_COUNT) % PATTERN_COUNT,
+							})
+						}
+					>
+						−
+					</button>
+					<span className="fl-pat-num">
+						{String(project.activePattern + 1).padStart(3, "0")}
+					</span>
+					<button
+						type="button"
+						className="mini"
+						disabled={locked}
+						onClick={() =>
+							commit({
+								...project,
+								activePattern: (project.activePattern + 1) % PATTERN_COUNT,
+							})
+						}
+					>
+						+
+					</button>
+					<span className="fl-pat-name">{activePat.name}</span>
+				</div>
 				<label className="knob">
 					<span>BPM</span>
 					<input
@@ -301,22 +327,6 @@ export function Daw({ pack, project: rawProject, onChange, locked }: Props) {
 					/>
 				</label>
 				<label className="knob">
-					<span>Bars</span>
-					<select
-						value={project.bars}
-						disabled={locked}
-						onChange={(e) =>
-							commit({ ...project, bars: Number(e.target.value) })
-						}
-					>
-						{[1, 2, 4, 8].map((b) => (
-							<option key={b} value={b}>
-								{b}
-							</option>
-						))}
-					</select>
-				</label>
-				<label className="knob">
 					<span>Len</span>
 					<select
 						value={noteLen}
@@ -325,21 +335,10 @@ export function Daw({ pack, project: rawProject, onChange, locked }: Props) {
 					>
 						{[1, 2, 3, 4, 6, 8].map((n) => (
 							<option key={n} value={n}>
-								{n}/16
+								{n}
 							</option>
 						))}
 					</select>
-				</label>
-				<label className="knob">
-					<span>Vel</span>
-					<input
-						type="range"
-						min={0.1}
-						max={1}
-						step={0.01}
-						value={paintVel}
-						onChange={(e) => setPaintVel(Number(e.target.value))}
-					/>
 				</label>
 				<button type="button" className="btn ghost" disabled={locked} onClick={undo}>
 					Undo
@@ -348,672 +347,757 @@ export function Daw({ pack, project: rawProject, onChange, locked }: Props) {
 					Redo
 				</button>
 				<button type="button" className="btn ghost" onClick={() => void download()}>
-					Export WAV
+					Export
 				</button>
 				<span className="daw-ready">
-					{ready ? `step ${step + 1}/${16 * project.bars}` : "Loading…"}
+					{ready
+						? `${project.playMode.toUpperCase()} · step ${step + 1}`
+						: "Loading…"}
 				</span>
 			</div>
 
-			{/* View + tools */}
-			<div className="daw-toolbar">
-				<div className="view-tabs">
-					{(
-						[
-							["seq", "Sequencer"],
-							["keys", "Piano roll"],
-							["mixer", "Mixer"],
-							["pads", "Pads"],
-						] as const
-					).map(([id, label]) => (
+			{/* Pattern chips */}
+			<div className="fl-pattern-bank">
+				{project.patterns.map((p, i) => {
+					const filled = p.tracks.some((t) => t.steps.some((s) => stepOn(s)));
+					return (
 						<button
-							key={id}
+							key={p.name}
 							type="button"
-							className={`btn ${view === id ? "primary" : "ghost"}`}
-							onClick={() => setView(id)}
-						>
-							{label}
-						</button>
-					))}
-				</div>
-				<div className="tool-tabs">
-					{(
-						[
-							["draw", "Draw"],
-							["erase", "Erase"],
-							["velo", "Velocity"],
-							["pitch", "Pitch+"],
-						] as const
-					).map(([id, label]) => (
-						<button
-							key={id}
-							type="button"
-							className={`btn ${tool === id ? "active" : "ghost"}`}
-							onClick={() => setTool(id)}
+							className={`fl-pat-chip ${i === project.activePattern ? "on" : ""} ${filled ? "filled" : ""}`}
 							disabled={locked}
+							onClick={() => commit({ ...project, activePattern: i })}
+							onDoubleClick={() => {
+								const name = prompt("Pattern name", p.name);
+								if (!name) return;
+								commit({
+									...project,
+									patterns: project.patterns.map((pp, pi) =>
+										pi === i ? { ...pp, name } : pp,
+									),
+								});
+							}}
 						>
-							{label}
+							{i + 1}
 						</button>
-					))}
-				</div>
+					);
+				})}
 			</div>
 
-			{view === "seq" && (
-				<div className="sequencer">
-					{project.tracks.map((t, ti) => {
-						const s = sampleById.get(t.sampleId);
-						const color = ROLE_COLOR[s?.role ?? "fx"] ?? "#94a3b8";
-						return (
-							<div
-								key={t.sampleId}
-								className={`seq-row ${selected === ti ? "selected" : ""} ${s?.mustUse ? "must" : ""}`}
-								onClick={() => setSelected(ti)}
-							>
-								<div className="pad-side">
-									<button
-										type="button"
-										className="pad-label"
-										style={{ borderColor: color, color }}
-										onClick={(e) => {
-											e.stopPropagation();
-											setSelected(ti);
-											void engine.preview(t.sampleId, t.pitch, t.gain, {
-												filter: t.filter,
-												drive: t.drive,
-												pan: t.pan,
-												reverse: t.reverse,
-											});
-										}}
-									>
-										<span className="role">
-											{s?.role}
-											{s?.mustUse ? " · MUST" : ""}
-										</span>
-										<span className="name">{s?.name}</span>
-									</button>
-									<div className="row-tools">
-										<button
-											type="button"
-											className="mini"
-											disabled={locked}
-											onClick={(e) => {
-												e.stopPropagation();
-												clearTrack(ti);
-											}}
-										>
-											Clr
-										</button>
-										<button
-											type="button"
-											className="mini"
-											disabled={locked}
-											onClick={(e) => {
-												e.stopPropagation();
-												randomizeTrack(ti);
-											}}
-										>
-											Rnd
-										</button>
-										<button
-											type="button"
-											className="mini"
-											disabled={locked}
-											onClick={(e) => {
-												e.stopPropagation();
-												copyTrack(ti);
-											}}
-										>
-											Cp
-										</button>
-										<button
-											type="button"
-											className="mini"
-											disabled={locked}
-											onClick={(e) => {
-												e.stopPropagation();
-												pasteTrack(ti);
-											}}
-										>
-											Pst
-										</button>
-									</div>
-								</div>
-								<div className="steps">
-									{t.steps.map((raw, si) => {
-										const cell = asStep(raw);
-										const beat = si % 4 === 0;
-										const activePlay =
-											playing &&
-											step % 16 === si &&
-											step < 16 * project.bars;
-										const h = cell.on ? 0.35 + cell.velocity * 0.65 : 0;
-										return (
-											<button
-												key={si}
-												type="button"
-												className={`step ${cell.on ? "on" : ""} ${beat ? "beat" : ""} ${activePlay ? "now" : ""}`}
-												style={
-													cell.on
-														? {
-																background: color,
-																opacity: 0.45 + cell.velocity * 0.55,
-																transform: `scaleY(${h + 0.35})`,
-															}
-														: undefined
-												}
-												title={
-													cell.on
-														? `vel ${cell.velocity.toFixed(2)} · pitch ${cell.pitch} · len ${cell.length}`
-														: undefined
-												}
-												disabled={locked}
-												onClick={(e) => {
-													e.stopPropagation();
-													if (tool === "draw" && cell.on && !e.shiftKey) {
-														setCell(ti, si, emptyStep());
-													} else {
-														paintStep(ti, si);
-													}
-												}}
-												onContextMenu={(e) => {
-													e.preventDefault();
-													e.stopPropagation();
-													if (cell.on) {
-														setCell(ti, si, {
-															...cell,
-															length: Math.min(8, cell.length + 1),
-														});
-													}
-												}}
-											/>
-										);
-									})}
-								</div>
-							</div>
-						);
-					})}
-				</div>
-			)}
+			{/* Window tabs — FL F5/F6/F7/F9 mapping */}
+			<div className="fl-window-tabs">
+				{(
+					[
+						["rack", "Channel Rack"],
+						["keys", "Piano Roll"],
+						["playlist", "Playlist"],
+						["mixer", "Mixer"],
+					] as const
+				).map(([id, label]) => (
+					<button
+						key={id}
+						type="button"
+						className={`btn ${panel === id ? "primary" : "ghost"}`}
+						onClick={() => setPanel(id)}
+					>
+						{label}
+					</button>
+				))}
+				<button
+					type="button"
+					className={`btn ghost ${graphOpen ? "active" : ""}`}
+					onClick={() => setGraphOpen((v) => !v)}
+				>
+					Graph
+				</button>
+			</div>
 
-			{view === "keys" && track && sample && (
-				<div className="piano-roll">
-					<div className="piano-meta">
-						<strong>
-							{sample.name} · piano roll
-						</strong>
-						<span>
-							Root {midiLabel(keyRoot)} · octave shift {octave >= 0 ? `+${octave}` : octave}
-						</span>
-						<div className="piano-oct">
-							<button
-								type="button"
-								className="btn ghost"
-								onClick={() => setOctave((o) => Math.max(-2, o - 1))}
-							>
-								Oct −
-							</button>
-							<button
-								type="button"
-								className="btn ghost"
-								onClick={() => setOctave((o) => Math.min(2, o + 1))}
-							>
-								Oct +
-							</button>
-						</div>
-					</div>
-					<div className="piano-grid">
-						{Array.from({ length: PIANO_RANGE }, (_, row) => {
-							const pitch = PIANO_RANGE - 1 - row + octave * 12 - 12;
-							const midi = keyRoot + pitch;
-							const black = [1, 3, 6, 8, 10].includes(((midi % 12) + 12) % 12);
+			<div className="fl-workspace">
+				{/* Browser */}
+				<aside className="fl-browser">
+					<div className="fl-browser-title">Browser · Pack</div>
+					<ul>
+						{pack.samples.map((s, i) => {
+							const color = ROLE_COLOR[s.role] ?? "#888";
 							return (
-								<div key={row} className={`piano-row ${black ? "black" : ""}`}>
+								<li key={s.id}>
 									<button
 										type="button"
-										className="piano-key"
-										onClick={() =>
-											void engine.preview(track.sampleId, track.pitch + pitch, track.gain, {
-												filter: track.filter,
-												drive: track.drive,
-												pan: track.pan,
-											})
-										}
+										className={`fl-browser-item ${selected === i ? "on" : ""} ${s.mustUse ? "must" : ""}`}
+										onClick={() => {
+											setSelected(i);
+											void engine.preview(s.id, 0, 0.85);
+										}}
+										onDoubleClick={() => setPanel("keys")}
 									>
-										{midiLabel(midi)}
+										<span className="dot" style={{ background: color }} />
+										<span className="nm">{s.name}</span>
+										<span className="rl">{s.role}</span>
 									</button>
-									<div className="piano-steps">
-										{track.steps.map((raw, si) => {
+								</li>
+							);
+						})}
+					</ul>
+				</aside>
+
+				<div className="fl-main">
+					{panel === "rack" && (
+						<div className="fl-rack">
+							{project.channels.map((ch, ci) => {
+								const s = sampleById.get(ch.sampleId);
+								const color = ROLE_COLOR[s?.role ?? "fx"] ?? "#888";
+								const steps =
+									activePat.tracks[ci]?.steps ??
+									Array.from({ length: project.patternLength }, () => emptyStep());
+								return (
+									<div
+										key={ch.sampleId}
+										className={`fl-channel ${selected === ci ? "selected" : ""}`}
+										onClick={() => setSelected(ci)}
+									>
+										<button
+											type="button"
+											className={`fl-led ${ch.mute ? "" : "lit"}`}
+											title="Mute"
+											disabled={locked}
+											onClick={(e) => {
+												e.stopPropagation();
+												updateChannel(ci, { mute: !ch.mute });
+											}}
+										/>
+										<label className="fl-knob" title="Pan">
+											<input
+												type="range"
+												min={-1}
+												max={1}
+												step={0.01}
+												value={ch.pan}
+												disabled={locked}
+												onChange={(e) =>
+													updateChannel(ci, { pan: Number(e.target.value) })
+												}
+											/>
+										</label>
+										<label className="fl-knob" title="Volume">
+											<input
+												type="range"
+												min={0}
+												max={1}
+												step={0.01}
+												value={ch.gain}
+												disabled={locked}
+												onChange={(e) =>
+													updateChannel(ci, { gain: Number(e.target.value) })
+												}
+											/>
+										</label>
+										<button
+											type="button"
+											className="fl-chan-btn"
+											style={{ borderColor: color, color }}
+											onClick={(e) => {
+												e.stopPropagation();
+												setSelected(ci);
+												void engine.preview(ch.sampleId, ch.pitch, ch.gain, ch);
+											}}
+											onDoubleClick={() => {
+												setSelected(ci);
+												setPanel("keys");
+											}}
+										>
+											<span className="fl-chan-name">{s?.name}</span>
+											<span className="fl-chan-role">
+												{s?.role}
+												{s?.mustUse ? " ★" : ""}
+											</span>
+										</button>
+										<div className="fl-steps">
+											{steps.map((raw, si) => {
+												const cell = asStep(raw);
+												const beat = si % 4 === 0;
+												const now =
+													playing &&
+													project.playMode === "pattern" &&
+													step % project.patternLength === si;
+												return (
+													<button
+														key={si}
+														type="button"
+														className={`fl-step ${cell.on ? "on" : ""} ${beat ? "beat" : ""} ${now ? "now" : ""}`}
+														style={
+															cell.on
+																? {
+																		opacity: 0.4 + cell.velocity * 0.6,
+																	}
+																: undefined
+														}
+														disabled={locked}
+														onClick={(e) => {
+															e.stopPropagation();
+															toggleStep(ci, si);
+														}}
+														onContextMenu={(e) => {
+															e.preventDefault();
+															if (!cell.on) return;
+															setCell(ci, si, {
+																...cell,
+																length: Math.min(8, cell.length + 1),
+															});
+														}}
+													/>
+												);
+											})}
+										</div>
+									</div>
+								);
+							})}
+
+							{graphOpen && channel && (
+								<div className="fl-graph">
+									<div className="fl-graph-tabs">
+										{(
+											[
+												["velocity", "Velocity"],
+												["pitch", "Pitch"],
+												["stepPan", "Pan"],
+											] as const
+										).map(([id, label]) => (
+											<button
+												key={id}
+												type="button"
+												className={graph === id ? "on" : ""}
+												onClick={() => setGraph(id)}
+											>
+												{label}
+											</button>
+										))}
+										<span className="fl-graph-hint">
+											Graph Editor · {sample?.name}
+										</span>
+									</div>
+									<div className="fl-graph-bars">
+										{(activePat.tracks[selected]?.steps ?? []).map((raw, si) => {
 											const cell = asStep(raw);
-											const active = cell.on && cell.pitch === pitch;
-											const beat = si % 4 === 0;
-											const now =
-												playing && step % 16 === si;
+											let h = 0.15;
+											if (graph === "velocity") h = cell.on ? cell.velocity : 0.08;
+											if (graph === "pitch")
+												h = cell.on ? (cell.pitch + 12) / 24 : 0.08;
+											if (graph === "stepPan")
+												h = cell.on ? (cell.stepPan + 1) / 2 : 0.08;
 											return (
 												<button
 													key={si}
 													type="button"
-													className={`pstep ${active ? "on" : ""} ${beat ? "beat" : ""} ${now ? "now" : ""}`}
-													disabled={locked}
-													onClick={() => {
-														if (tool === "erase" || (active && tool === "draw")) {
-															setCell(selected, si, emptyStep());
-														} else {
-															setCell(
-																selected,
-																si,
-																hitStep(paintVel, pitch, noteLen),
-															);
-															void engine.preview(
-																track.sampleId,
-																track.pitch + pitch,
-																track.gain * paintVel,
-																{ filter: track.filter, drive: track.drive },
-															);
-														}
+													className={`fl-gbar ${cell.on ? "on" : ""}`}
+													disabled={locked || !cell.on}
+													style={{ height: `${Math.round(h * 100)}%` }}
+													onClick={(e) => {
+														const rect = (
+															e.currentTarget.parentElement as HTMLElement
+														).getBoundingClientRect();
+														const y = 1 - (e.clientY - rect.top) / rect.height;
+														const next = { ...cell };
+														if (graph === "velocity")
+															next.velocity = Math.max(0.05, Math.min(1, y));
+														if (graph === "pitch")
+															next.pitch = Math.round(y * 24 - 12);
+														if (graph === "stepPan")
+															next.stepPan = Math.max(-1, Math.min(1, y * 2 - 1));
+														setCell(selected, si, next);
 													}}
 												/>
 											);
 										})}
 									</div>
 								</div>
-							);
-						})}
-					</div>
-				</div>
-			)}
-
-			{view === "mixer" && (
-				<div className="mixer-board">
-					<div className="mixer-strips">
-						{project.tracks.map((t, ti) => {
-							const s = sampleById.get(t.sampleId);
-							const color = ROLE_COLOR[s?.role ?? "fx"] ?? "#94a3b8";
-							return (
-								<div
-									key={t.sampleId}
-									className={`strip ${selected === ti ? "selected" : ""}`}
-									onClick={() => setSelected(ti)}
-								>
-									<div className="strip-name" style={{ color }}>
-										{s?.name}
-									</div>
-									<label>
-										<span>Vol</span>
-										<input
-											type="range"
-											min={0}
-											max={1}
-											step={0.01}
-											value={t.gain}
-											disabled={locked}
-											onChange={(e) =>
-												updateTrack(ti, { gain: Number(e.target.value) })
-											}
-										/>
-									</label>
-									<label>
-										Pan
-										<input
-											type="range"
-											min={-1}
-											max={1}
-											step={0.01}
-											value={t.pan}
-											disabled={locked}
-											onChange={(e) =>
-												updateTrack(ti, { pan: Number(e.target.value) })
-											}
-										/>
-									</label>
-									<label>
-										Filter
-										<input
-											type="range"
-											min={0}
-											max={1}
-											step={0.01}
-											value={t.filter}
-											disabled={locked}
-											onChange={(e) =>
-												updateTrack(ti, { filter: Number(e.target.value) })
-											}
-										/>
-									</label>
-									<label>
-										Drive
-										<input
-											type="range"
-											min={0}
-											max={1}
-											step={0.01}
-											value={t.drive}
-											disabled={locked}
-											onChange={(e) =>
-												updateTrack(ti, { drive: Number(e.target.value) })
-											}
-										/>
-									</label>
-									<label>
-										Rev
-										<input
-											type="range"
-											min={0}
-											max={1}
-											step={0.01}
-											value={t.reverb}
-											disabled={locked}
-											onChange={(e) =>
-												updateTrack(ti, { reverb: Number(e.target.value) })
-											}
-										/>
-									</label>
-									<label>
-										Dly
-										<input
-											type="range"
-											min={0}
-											max={1}
-											step={0.01}
-											value={t.delay}
-											disabled={locked}
-											onChange={(e) =>
-												updateTrack(ti, { delay: Number(e.target.value) })
-											}
-										/>
-									</label>
-									<div className="strip-toggles">
-										<button
-											type="button"
-											className={`mini ${t.mute ? "hot" : ""}`}
-											disabled={locked}
-											onClick={() => updateTrack(ti, { mute: !t.mute })}
-										>
-											M
-										</button>
-										<button
-											type="button"
-											className={`mini ${t.solo ? "hot" : ""}`}
-											disabled={locked}
-											onClick={() => updateTrack(ti, { solo: !t.solo })}
-										>
-											S
-										</button>
-										<button
-											type="button"
-											className={`mini ${t.reverse ? "hot" : ""}`}
-											disabled={locked}
-											onClick={() => updateTrack(ti, { reverse: !t.reverse })}
-										>
-											Rev
-										</button>
-									</div>
-								</div>
-							);
-						})}
-						<div className="strip master-strip">
-							<div className="strip-name">Master</div>
-							<label>
-								<span>Vol</span>
-								<input
-									type="range"
-									min={0}
-									max={1}
-									step={0.01}
-									value={project.masterGain}
-									disabled={locked}
-									onChange={(e) =>
-										commit({ ...project, masterGain: Number(e.target.value) })
-									}
-								/>
-							</label>
-							<label>
-								Room
-								<input
-									type="range"
-									min={0}
-									max={1}
-									step={0.01}
-									value={project.masterReverb}
-									disabled={locked}
-									onChange={(e) =>
-										commit({
-											...project,
-											masterReverb: Number(e.target.value),
-										})
-									}
-								/>
-							</label>
-							<label>
-								Crush
-								<input
-									type="range"
-									min={0}
-									max={1}
-									step={0.01}
-									value={project.masterCrush}
-									disabled={locked}
-									onChange={(e) =>
-										commit({
-											...project,
-											masterCrush: Number(e.target.value),
-										})
-									}
-								/>
-							</label>
-							<button
-								type="button"
-								className="btn ghost"
-								disabled={locked}
-								onClick={doublePattern}
-							>
-								Double bars
-							</button>
+							)}
 						</div>
-					</div>
-				</div>
-			)}
+					)}
 
-			{view === "pads" && (
-				<div className="pads-view">
-					<p className="pads-hint">
-						Click pads or keys <kbd>QWER</kbd>/<kbd>ASDF</kbd> · octave{" "}
-						{octave >= 0 ? `+${octave}` : octave}
-					</p>
-					<div className="pads-grid">
-						{project.tracks.map((t, ti) => {
-							const s = sampleById.get(t.sampleId);
-							const color = ROLE_COLOR[s?.role ?? "fx"] ?? "#94a3b8";
-							return (
-								<button
-									key={t.sampleId}
-									type="button"
-									className={`drum-pad ${selected === ti ? "selected" : ""}`}
-									style={{ borderColor: color }}
-									onMouseDown={() => {
-										setSelected(ti);
-										void engine.preview(
-											t.sampleId,
-											t.pitch + octave * 12,
-											t.gain,
-											{
-												filter: t.filter,
-												drive: t.drive,
-												pan: t.pan,
-												reverse: t.reverse,
-											},
+					{panel === "keys" && channel && sample && (
+						<div className="piano-roll fl-piano">
+							<div className="piano-meta">
+								<strong>
+									Piano roll · {sample.name}
+								</strong>
+								<span>Double-click channel button opens this</span>
+								<div className="piano-oct">
+									<button
+										type="button"
+										className="btn ghost"
+										onClick={() => setOctave((o) => o - 1)}
+									>
+										Oct −
+									</button>
+									<button
+										type="button"
+										className="btn ghost"
+										onClick={() => setOctave((o) => o + 1)}
+									>
+										Oct +
+									</button>
+									<button
+										type="button"
+										className="btn ghost"
+										disabled={locked}
+										onClick={() => stampScale(selected)}
+									>
+										Stamp scale
+									</button>
+								</div>
+							</div>
+							<div className="piano-grid">
+								{Array.from({ length: PIANO_RANGE }, (_, row) => {
+									const pitch = PIANO_RANGE - 1 - row + octave * 12 - 12;
+									const midi = sample.rootMidi + pitch;
+									const black = [1, 3, 6, 8, 10].includes(
+										((midi % 12) + 12) % 12,
+									);
+									const steps = activePat.tracks[selected]?.steps ?? [];
+									return (
+										<div
+											key={row}
+											className={`piano-row ${black ? "black" : ""}`}
+										>
+											<button
+												type="button"
+												className="piano-key"
+												onClick={() =>
+													void engine.preview(
+														channel.sampleId,
+														channel.pitch + pitch,
+														channel.gain,
+														channel,
+													)
+												}
+											>
+												{midiLabel(midi)}
+											</button>
+											<div className="piano-steps">
+												{steps.map((raw, si) => {
+													const cell = asStep(raw);
+													const active = cell.on && cell.pitch === pitch;
+													return (
+														<button
+															key={si}
+															type="button"
+															className={`pstep ${active ? "on" : ""} ${si % 4 === 0 ? "beat" : ""}`}
+															disabled={locked}
+															style={
+																active
+																	? {
+																			gridColumn: `span ${Math.min(cell.length, 16 - si)}`,
+																		}
+																	: undefined
+															}
+															onClick={() => {
+																if (active) setCell(selected, si, emptyStep());
+																else {
+																	setCell(
+																		selected,
+																		si,
+																		hitStep(paintVel, pitch, noteLen),
+																	);
+																	void engine.preview(
+																		channel.sampleId,
+																		channel.pitch + pitch,
+																		channel.gain * paintVel,
+																		channel,
+																	);
+																}
+															}}
+														/>
+													);
+												})}
+											</div>
+										</div>
+									);
+								})}
+							</div>
+							{/* Velocity lane */}
+							<div className="fl-vel-lane">
+								<span>VEL</span>
+								<div className="fl-graph-bars">
+									{(activePat.tracks[selected]?.steps ?? []).map((raw, si) => {
+										const cell = asStep(raw);
+										return (
+											<button
+												key={si}
+												type="button"
+												className={`fl-gbar ${cell.on ? "on" : ""}`}
+												disabled={locked || !cell.on}
+												style={{
+													height: `${Math.round((cell.on ? cell.velocity : 0.08) * 100)}%`,
+												}}
+												onClick={(e) => {
+													const rect = (
+														e.currentTarget.parentElement as HTMLElement
+													).getBoundingClientRect();
+													const y = 1 - (e.clientY - rect.top) / rect.height;
+													setCell(selected, si, {
+														...cell,
+														velocity: Math.max(0.05, Math.min(1, y)),
+													});
+												}}
+											/>
 										);
-									}}
-								>
-									<span className="pad-key">
-										{"QWERASDF"[ti] ?? "·"}
-									</span>
-									<span className="pad-role">{s?.role}</span>
-									<span className="pad-name">{s?.name}</span>
-								</button>
-							);
-						})}
-					</div>
-					<div className="piano-oct">
-						<button
-							type="button"
-							className="btn ghost"
-							onClick={() => setOctave((o) => Math.max(-2, o - 1))}
-						>
-							Oct −
-						</button>
-						<button
-							type="button"
-							className="btn ghost"
-							onClick={() => setOctave((o) => Math.min(2, o + 1))}
-						>
-							Oct +
-						</button>
-					</div>
-				</div>
-			)}
+									})}
+								</div>
+							</div>
+						</div>
+					)}
 
-			{/* Inspector for selected track */}
-			{track && sample && view !== "mixer" && (
-				<div className="mixer inspector">
-					<h3>
-						{sample.name} <em>({sample.role})</em>
-						{sample.mustUse ? <span className="must-tag">MUST USE</span> : null}
-					</h3>
-					<div className="mixer-grid">
-						<label>
-							Gain
-							<input
-								type="range"
-								min={0}
-								max={1}
-								step={0.01}
-								value={track.gain}
-								disabled={locked}
-								onChange={(e) =>
-									updateTrack(selected, { gain: Number(e.target.value) })
-								}
-							/>
-						</label>
-						<label>
-							Transpose
-							<input
-								type="range"
-								min={-24}
-								max={24}
-								step={1}
-								value={track.pitch}
-								disabled={locked}
-								onChange={(e) =>
-									updateTrack(selected, { pitch: Number(e.target.value) })
-								}
-							/>
-						</label>
-						<label>
-							Filter
-							<input
-								type="range"
-								min={0}
-								max={1}
-								step={0.01}
-								value={track.filter}
-								disabled={locked}
-								onChange={(e) =>
-									updateTrack(selected, { filter: Number(e.target.value) })
-								}
-							/>
-						</label>
-						<label>
-							Drive
-							<input
-								type="range"
-								min={0}
-								max={1}
-								step={0.01}
-								value={track.drive}
-								disabled={locked}
-								onChange={(e) =>
-									updateTrack(selected, { drive: Number(e.target.value) })
-								}
-							/>
-						</label>
-						<label>
-							Pan
-							<input
-								type="range"
-								min={-1}
-								max={1}
-								step={0.01}
-								value={track.pan}
-								disabled={locked}
-								onChange={(e) =>
-									updateTrack(selected, { pan: Number(e.target.value) })
-								}
-							/>
-						</label>
-						<label>
-							Reverb
-							<input
-								type="range"
-								min={0}
-								max={1}
-								step={0.01}
-								value={track.reverb}
-								disabled={locked}
-								onChange={(e) =>
-									updateTrack(selected, { reverb: Number(e.target.value) })
-								}
-							/>
-						</label>
-						<label>
-							Delay
-							<input
-								type="range"
-								min={0}
-								max={1}
-								step={0.01}
-								value={track.delay}
-								disabled={locked}
-								onChange={(e) =>
-									updateTrack(selected, { delay: Number(e.target.value) })
-								}
-							/>
-						</label>
-						<label className="check">
-							<input
-								type="checkbox"
-								checked={track.mute}
-								disabled={locked}
-								onChange={(e) => updateTrack(selected, { mute: e.target.checked })}
-							/>
-							Mute
-						</label>
-						<label className="check">
-							<input
-								type="checkbox"
-								checked={track.solo}
-								disabled={locked}
-								onChange={(e) => updateTrack(selected, { solo: e.target.checked })}
-							/>
-							Solo
-						</label>
-						<label className="check">
-							<input
-								type="checkbox"
-								checked={track.reverse}
-								disabled={locked}
-								onChange={(e) =>
-									updateTrack(selected, { reverse: e.target.checked })
-								}
-							/>
-							Reverse
-						</label>
-					</div>
-					<p className="daw-shortcuts">
-						Space play · 1–4 views · D/E/V/P tools · ⌘Z undo · right-click step =
-						longer gate
-					</p>
+					{panel === "playlist" && (
+						<div className="fl-playlist">
+							<div className="fl-playlist-head">
+								<strong>Playlist · Song mode arrangement</strong>
+								<span>{songBars} bars</span>
+								<button
+									type="button"
+									className="btn ghost"
+									disabled={locked}
+									onClick={() => addClip(project.activePattern)}
+								>
+									+ Drop pattern {project.activePattern + 1}
+								</button>
+							</div>
+							<div
+								className="fl-playlist-grid"
+								style={{
+									gridTemplateColumns: `80px repeat(${Math.max(songBars, 4)}, minmax(48px, 1fr))`,
+								}}
+							>
+								<div className="fl-pl-corner" />
+								{Array.from({ length: Math.max(songBars, 4) }, (_, b) => (
+									<div key={b} className="fl-pl-barhead">
+										{b + 1}
+									</div>
+								))}
+								{project.patterns.map((p, pi) => (
+									<div key={p.name} className="fl-pl-row" style={{ display: "contents" }}>
+										<div className="fl-pl-label">{p.name}</div>
+										{Array.from({ length: Math.max(songBars, 4) }, (_, b) => {
+											const clip = project.playlist.find(
+												(c) =>
+													c.patternIndex === pi &&
+													b >= c.startBar &&
+													b < c.startBar + c.lengthBars,
+											);
+											return (
+												<button
+													key={`${pi}-${b}`}
+													type="button"
+													className={`fl-pl-cell ${clip ? "filled" : ""}`}
+													disabled={locked}
+													onClick={() => {
+														if (clip) {
+															commit({
+																...project,
+																playlist: project.playlist.filter(
+																	(c) => c.id !== clip.id,
+																),
+																playMode: "song",
+															});
+														} else {
+															commit({
+																...project,
+																playlist: [
+																	...project.playlist,
+																	{
+																		id: `c${Date.now()}${b}`,
+																		patternIndex: pi,
+																		startBar: b,
+																		lengthBars: 1,
+																	},
+																],
+																playMode: "song",
+															});
+														}
+													}}
+												>
+													{clip ? `P${pi + 1}` : ""}
+												</button>
+											);
+										})}
+									</div>
+								))}
+							</div>
+							<p className="fl-hint">
+								Switch transport to <strong>SONG</strong> to hear the arrangement.
+								PAT loops the selected pattern only.
+							</p>
+						</div>
+					)}
+
+					{panel === "mixer" && (
+						<div className="mixer-board fl-mixer">
+							<div className="mixer-strips">
+								{project.channels.map((ch, ci) => {
+									const s = sampleById.get(ch.sampleId);
+									const color = ROLE_COLOR[s?.role ?? "fx"] ?? "#888";
+									return (
+										<div
+											key={ch.sampleId}
+											className={`strip ${selected === ci ? "selected" : ""}`}
+											onClick={() => setSelected(ci)}
+										>
+											<div className="strip-name" style={{ color }}>
+												{s?.name}
+											</div>
+											<label>
+												Vol
+												<input
+													type="range"
+													min={0}
+													max={1}
+													step={0.01}
+													value={ch.gain}
+													disabled={locked}
+													onChange={(e) =>
+														updateChannel(ci, { gain: Number(e.target.value) })
+													}
+												/>
+											</label>
+											<label>
+												Pan
+												<input
+													type="range"
+													min={-1}
+													max={1}
+													step={0.01}
+													value={ch.pan}
+													disabled={locked}
+													onChange={(e) =>
+														updateChannel(ci, { pan: Number(e.target.value) })
+													}
+												/>
+											</label>
+											<div className="fl-inserts">
+												<span className="ins-label">INSERTS</span>
+												<label>
+													EQ Lo
+													<input
+														type="range"
+														min={-1}
+														max={1}
+														step={0.01}
+														value={ch.eqLow}
+														disabled={locked}
+														onChange={(e) =>
+															updateChannel(ci, {
+																eqLow: Number(e.target.value),
+															})
+														}
+													/>
+												</label>
+												<label>
+													EQ Mid
+													<input
+														type="range"
+														min={-1}
+														max={1}
+														step={0.01}
+														value={ch.eqMid}
+														disabled={locked}
+														onChange={(e) =>
+															updateChannel(ci, {
+																eqMid: Number(e.target.value),
+															})
+														}
+													/>
+												</label>
+												<label>
+													EQ Hi
+													<input
+														type="range"
+														min={-1}
+														max={1}
+														step={0.01}
+														value={ch.eqHigh}
+														disabled={locked}
+														onChange={(e) =>
+															updateChannel(ci, {
+																eqHigh: Number(e.target.value),
+															})
+														}
+													/>
+												</label>
+												<label>
+													Comp
+													<input
+														type="range"
+														min={0}
+														max={1}
+														step={0.01}
+														value={ch.compress}
+														disabled={locked}
+														onChange={(e) =>
+															updateChannel(ci, {
+																compress: Number(e.target.value),
+															})
+														}
+													/>
+												</label>
+												<label>
+													Drive
+													<input
+														type="range"
+														min={0}
+														max={1}
+														step={0.01}
+														value={ch.drive}
+														disabled={locked}
+														onChange={(e) =>
+															updateChannel(ci, {
+																drive: Number(e.target.value),
+															})
+														}
+													/>
+												</label>
+												<label>
+													Filter
+													<input
+														type="range"
+														min={0}
+														max={1}
+														step={0.01}
+														value={ch.filter}
+														disabled={locked}
+														onChange={(e) =>
+															updateChannel(ci, {
+																filter: Number(e.target.value),
+															})
+														}
+													/>
+												</label>
+												<label>
+													Rev
+													<input
+														type="range"
+														min={0}
+														max={1}
+														step={0.01}
+														value={ch.reverb}
+														disabled={locked}
+														onChange={(e) =>
+															updateChannel(ci, {
+																reverb: Number(e.target.value),
+															})
+														}
+													/>
+												</label>
+												<label>
+													Dly
+													<input
+														type="range"
+														min={0}
+														max={1}
+														step={0.01}
+														value={ch.delay}
+														disabled={locked}
+														onChange={(e) =>
+															updateChannel(ci, {
+																delay: Number(e.target.value),
+															})
+														}
+													/>
+												</label>
+											</div>
+											<div className="strip-toggles">
+												<button
+													type="button"
+													className={`mini ${ch.mute ? "hot" : ""}`}
+													disabled={locked}
+													onClick={() => updateChannel(ci, { mute: !ch.mute })}
+												>
+													M
+												</button>
+												<button
+													type="button"
+													className={`mini ${ch.solo ? "hot" : ""}`}
+													disabled={locked}
+													onClick={() => updateChannel(ci, { solo: !ch.solo })}
+												>
+													S
+												</button>
+												<button
+													type="button"
+													className={`mini ${ch.reverse ? "hot" : ""}`}
+													disabled={locked}
+													onClick={() =>
+														updateChannel(ci, { reverse: !ch.reverse })
+													}
+												>
+													Rev
+												</button>
+											</div>
+										</div>
+									);
+								})}
+								<div className="strip master-strip">
+									<div className="strip-name">Master</div>
+									<label>
+										Vol
+										<input
+											type="range"
+											min={0}
+											max={1}
+											step={0.01}
+											value={project.masterGain}
+											disabled={locked}
+											onChange={(e) =>
+												commit({
+													...project,
+													masterGain: Number(e.target.value),
+												})
+											}
+										/>
+									</label>
+									<label>
+										Room
+										<input
+											type="range"
+											min={0}
+											max={1}
+											step={0.01}
+											value={project.masterReverb}
+											disabled={locked}
+											onChange={(e) =>
+												commit({
+													...project,
+													masterReverb: Number(e.target.value),
+												})
+											}
+										/>
+									</label>
+									<label>
+										Crush
+										<input
+											type="range"
+											min={0}
+											max={1}
+											step={0.01}
+											value={project.masterCrush}
+											disabled={locked}
+											onChange={(e) =>
+												commit({
+													...project,
+													masterCrush: Number(e.target.value),
+												})
+											}
+										/>
+									</label>
+								</div>
+							</div>
+						</div>
+					)}
 				</div>
-			)}
+			</div>
+
+			<p className="daw-shortcuts">
+				Space play · Tab Pat/Song · [ ] pattern · F5 Playlist · F6 Rack · F7 Piano ·
+				F9 Mixer · Graph = velocity/pitch/pan per step
+			</p>
 		</div>
 	);
 }

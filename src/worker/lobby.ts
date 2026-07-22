@@ -259,11 +259,33 @@ export class BeatLobby extends DurableObject<Env> {
 							throw new Error("Record a producer tag before submitting");
 						}
 						for (const id of pack.brief.mustUseIds) {
-							const track = msg.project.tracks.find((t) => t.sampleId === id);
-							const hits =
-								track?.steps.filter((s) =>
-									typeof s === "boolean" ? s : !!(s as { on?: boolean })?.on,
-								).length ?? 0;
+							const proj = msg.project as {
+								channels?: { sampleId: string }[];
+								patterns?: { tracks: { steps: unknown[] }[] }[];
+								tracks?: { sampleId: string; steps: unknown[] }[];
+							};
+							let hits = 0;
+							if (proj.channels && proj.patterns) {
+								const chIdx = proj.channels.findIndex((c) => c.sampleId === id);
+								if (chIdx >= 0) {
+									for (const pat of proj.patterns) {
+										const steps = pat.tracks?.[chIdx]?.steps ?? [];
+										hits += steps.filter((s) =>
+											typeof s === "boolean"
+												? s
+												: !!(s as { on?: boolean })?.on,
+										).length;
+									}
+								}
+							} else if (proj.tracks) {
+								const track = proj.tracks.find((t) => t.sampleId === id);
+								hits =
+									track?.steps.filter((s) =>
+										typeof s === "boolean"
+											? s
+											: !!(s as { on?: boolean })?.on,
+									).length ?? 0;
+							}
 							if (hits < 1) {
 								const name = pack.samples.find((s) => s.id === id)?.name ?? id;
 								throw new Error(`Must use required element: ${name}`);

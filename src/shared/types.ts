@@ -56,39 +56,82 @@ export type Pack = {
 	brief: CookBrief;
 };
 
-/** One sequencer cell — velocity, micro-pitch, and gate length */
 export type StepCell = {
 	on: boolean;
-	velocity: number; // 0-1
-	pitch: number; // semitone offset for this hit
-	length: number; // gate length in 16ths (1-8)
+	velocity: number;
+	pitch: number;
+	length: number;
+	/** Graph-editor pan offset for this step (-1..1), added to channel pan */
+	stepPan: number;
 };
 
-export type TrackPattern = {
+/** Global channel (FL Channel Rack row + mixer strip) */
+export type Channel = {
 	sampleId: string;
-	steps: StepCell[]; // length 16
 	gain: number;
 	mute: boolean;
 	solo: boolean;
-	pitch: number; // track transpose -24..24
+	pitch: number;
 	filter: number;
 	drive: number;
-	pan: number; // -1..1
-	reverb: number; // 0-1 send
-	delay: number; // 0-1 send
+	pan: number;
+	reverb: number;
+	delay: number;
 	reverse: boolean;
+	eqLow: number;
+	eqMid: number;
+	eqHigh: number;
+	compress: number;
 };
+
+export type PatternTrack = {
+	steps: StepCell[];
+};
+
+export type Pattern = {
+	name: string;
+	tracks: PatternTrack[];
+};
+
+export type PlaylistClip = {
+	id: string;
+	patternIndex: number;
+	startBar: number;
+	lengthBars: number;
+};
+
+export type PlayMode = "pattern" | "song";
 
 export type Project = {
 	bpm: number;
 	swing: number;
-	tracks: TrackPattern[];
-	bars: number; // 1-8
+	patternLength: number;
+	channels: Channel[];
+	patterns: Pattern[];
+	activePattern: number;
+	playMode: PlayMode;
+	playlist: PlaylistClip[];
 	masterGain: number;
 	masterReverb: number;
 	masterCrush: number;
 	tagAudio?: string;
 	tagMime?: string;
+};
+
+/** @deprecated legacy shape — migrated by normalizeProject */
+export type LegacyTrackPattern = {
+	sampleId: string;
+	steps: Array<StepCell | boolean>;
+	gain?: number;
+	mute?: boolean;
+	solo?: boolean;
+	pitch?: number;
+	filter?: number;
+	drive?: number;
+	pan?: number;
+	reverb?: number;
+	delay?: number;
+	reverse?: boolean;
 };
 
 export type PlayerPublic = {
@@ -164,6 +207,8 @@ export const GENRES: Genre[] = [
 	"Afrobeats",
 ];
 
+export const PATTERN_COUNT = 8;
+
 export const STARTER_GROOVES: Record<
 	Genre,
 	Partial<Record<SampleRole, number[]>>
@@ -231,7 +276,6 @@ export const STARTER_GROOVES: Record<
 	},
 };
 
-/** Melody/bass starter pitch contours (semitone offsets from root) */
 export const STARTER_PITCHES: Partial<
 	Record<Genre, Partial<Record<"bass" | "melody" | "vocal", number[]>>>
 > = {
@@ -269,16 +313,21 @@ export const STARTER_PITCHES: Partial<
 	},
 };
 
+function clamp01(n: number) {
+	return Math.max(0, Math.min(1, n));
+}
+
 export function emptyStep(): StepCell {
-	return { on: false, velocity: 0.85, pitch: 0, length: 1 };
+	return { on: false, velocity: 0.85, pitch: 0, length: 1, stepPan: 0 };
 }
 
 export function hitStep(
 	velocity = 0.85,
 	pitch = 0,
 	length = 1,
+	stepPan = 0,
 ): StepCell {
-	return { on: true, velocity, pitch, length };
+	return { on: true, velocity, pitch, length, stepPan };
 }
 
 export function stepOn(step: StepCell | boolean | undefined): boolean {
@@ -295,27 +344,31 @@ export function asStep(step: StepCell | boolean | undefined): StepCell {
 		velocity: clamp01(step.velocity ?? 0.85),
 		pitch: Math.max(-24, Math.min(24, step.pitch ?? 0)),
 		length: Math.max(1, Math.min(8, Math.round(step.length ?? 1))),
+		stepPan: Math.max(-1, Math.min(1, step.stepPan ?? 0)),
 	};
 }
 
-function clamp01(n: number) {
-	return Math.max(0, Math.min(1, n));
+function emptyPatternTracks(channelCount: number, length: number): PatternTrack[] {
+	return Array.from({ length: channelCount }, () => ({
+		steps: Array.from({ length }, () => emptyStep()),
+	}));
 }
 
-/** Migrate older boolean-step projects + fill missing fields */
-export function normalizeProject(raw: Project): Project {
-	return {
-		bpm: raw.bpm || 120,
-		swing: raw.swing ?? 0.08,
-		bars: Math.max(1, Math.min(8, raw.bars || 2)),
-		masterGain: raw.masterGain ?? 0.85,
-		masterReverb: raw.masterReverb ?? 0.12,
-		masterCrush: raw.masterCrush ?? 0,
-		tagAudio: raw.tagAudio,
-		tagMime: raw.tagMime,
-		tracks: (raw.tracks ?? []).map((t) => ({
+export function activePatternTracks(project: Project): PatternTrack[] {
+	const p = project.patterns[project.activePattern] ?? project.patterns[0];
+	return p?.tracks ?? [];
+}
+
+export function normalizeProject(raw: Project | Record<string, unknown>): Project {
+	const r = raw as Project & {
+		tracks?: LegacyTrackPattern[];
+		bars?: number;
+	};
+
+	// Legacy single-pattern projects
+	if ((!r.channels || r.channels.length === 0) && r.tracks?.length) {
+		const channels: Channel[] = r.tracks.map((t) => ({
 			sampleId: t.sampleId,
-			steps: Array.from({ length: 16 }, (_, i) => asStep(t.steps?.[i])),
 			gain: t.gain ?? 0.75,
 			mute: !!t.mute,
 			solo: !!t.solo,
@@ -326,7 +379,103 @@ export function normalizeProject(raw: Project): Project {
 			reverb: t.reverb ?? 0.05,
 			delay: t.delay ?? 0,
 			reverse: !!t.reverse,
+			eqLow: 0,
+			eqMid: 0,
+			eqHigh: 0,
+			compress: 0,
+		}));
+		const len = 16;
+		const pattern0: Pattern = {
+			name: "Pattern 1",
+			tracks: r.tracks.map((t) => ({
+				steps: Array.from({ length: len }, (_, i) => asStep(t.steps?.[i])),
+			})),
+		};
+		const patterns: Pattern[] = [
+			pattern0,
+			...Array.from({ length: PATTERN_COUNT - 1 }, (_, i) => ({
+				name: `Pattern ${i + 2}`,
+				tracks: emptyPatternTracks(channels.length, len),
+			})),
+		];
+		const bars = Math.max(1, Math.min(8, r.bars || 2));
+		return {
+			bpm: r.bpm || 120,
+			swing: r.swing ?? 0.08,
+			patternLength: len,
+			channels,
+			patterns,
+			activePattern: 0,
+			playMode: "pattern",
+			playlist: [
+				{ id: "c0", patternIndex: 0, startBar: 0, lengthBars: bars },
+			],
+			masterGain: r.masterGain ?? 0.85,
+			masterReverb: r.masterReverb ?? 0.12,
+			masterCrush: r.masterCrush ?? 0,
+			tagAudio: r.tagAudio,
+			tagMime: r.tagMime,
+		};
+	}
+
+	const channels = (r.channels ?? []).map((c) => ({
+		sampleId: c.sampleId,
+		gain: c.gain ?? 0.75,
+		mute: !!c.mute,
+		solo: !!c.solo,
+		pitch: c.pitch ?? 0,
+		filter: c.filter ?? 0.7,
+		drive: c.drive ?? 0,
+		pan: c.pan ?? 0,
+		reverb: c.reverb ?? 0.05,
+		delay: c.delay ?? 0,
+		reverse: !!c.reverse,
+		eqLow: c.eqLow ?? 0,
+		eqMid: c.eqMid ?? 0,
+		eqHigh: c.eqHigh ?? 0,
+		compress: c.compress ?? 0,
+	}));
+	const plen = r.patternLength || 16;
+	let patterns = (r.patterns ?? []).map((p, pi) => ({
+		name: p.name || `Pattern ${pi + 1}`,
+		tracks: channels.map((_, ti) => ({
+			steps: Array.from({ length: plen }, (_, si) =>
+				asStep(p.tracks?.[ti]?.steps?.[si]),
+			),
 		})),
+	}));
+	while (patterns.length < PATTERN_COUNT) {
+		patterns.push({
+			name: `Pattern ${patterns.length + 1}`,
+			tracks: emptyPatternTracks(channels.length, plen),
+		});
+	}
+	patterns = patterns.slice(0, PATTERN_COUNT);
+
+	const playlist =
+		r.playlist?.length > 0
+			? r.playlist.map((c, i) => ({
+					id: c.id || `clip${i}`,
+					patternIndex: Math.max(0, Math.min(PATTERN_COUNT - 1, c.patternIndex)),
+					startBar: Math.max(0, c.startBar),
+					lengthBars: Math.max(1, c.lengthBars),
+				}))
+			: [{ id: "c0", patternIndex: 0, startBar: 0, lengthBars: 2 }];
+
+	return {
+		bpm: r.bpm || 120,
+		swing: r.swing ?? 0.08,
+		patternLength: plen,
+		channels,
+		patterns,
+		activePattern: Math.max(0, Math.min(PATTERN_COUNT - 1, r.activePattern ?? 0)),
+		playMode: r.playMode === "song" ? "song" : "pattern",
+		playlist,
+		masterGain: r.masterGain ?? 0.85,
+		masterReverb: r.masterReverb ?? 0.12,
+		masterCrush: r.masterCrush ?? 0,
+		tagAudio: r.tagAudio,
+		tagMime: r.tagMime,
 	};
 }
 
@@ -334,74 +483,95 @@ export function EMPTY_PROJECT(pack: Pack): Project {
 	const groove = STARTER_GROOVES[pack.genre];
 	const pitches = STARTER_PITCHES[pack.genre];
 	const usedRoles = new Set<SampleRole>();
+	const plen = 16;
 
+	const channels: Channel[] = pack.samples.map((s) => ({
+		sampleId: s.id,
+		gain: s.role === "kick" || s.role === "bass" ? 0.9 : 0.7,
+		mute: false,
+		solo: false,
+		pitch: 0,
+		filter: Math.max(0.45, s.filter),
+		drive: s.drive * 0.28,
+		pan:
+			s.role === "hat" ? 0.15 : s.role === "perc" ? -0.2 : s.role === "fx" ? 0.25 : 0,
+		reverb:
+			s.role === "melody" || s.role === "vocal" || s.role === "fx"
+				? 0.22
+				: s.role === "snare"
+					? 0.12
+					: 0.04,
+		delay: s.role === "melody" || s.role === "vocal" ? 0.12 : 0,
+		reverse: false,
+		eqLow: s.role === "kick" || s.role === "bass" ? 0.15 : 0,
+		eqMid: 0,
+		eqHigh: s.role === "hat" || s.role === "perc" ? 0.1 : 0,
+		compress: s.role === "kick" || s.role === "snare" ? 0.2 : 0,
+	}));
+
+	const pattern0Tracks: PatternTrack[] = pack.samples.map((s) => {
+		const steps = Array.from({ length: plen }, () => emptyStep());
+		const pattern = groove[s.role];
+		if (pattern && !usedRoles.has(s.role)) {
+			usedRoles.add(s.role);
+			const contour =
+				s.role === "bass" || s.role === "melody" || s.role === "vocal"
+					? pitches?.[s.role]
+					: undefined;
+			for (const i of pattern) {
+				const vel =
+					s.role === "hat" && i % 2 === 1 ? 0.55 : s.role === "kick" ? 0.95 : 0.82;
+				steps[i] = hitStep(vel, contour?.[i] ?? 0, s.role === "bass" ? 2 : 1);
+			}
+		}
+		return { steps };
+	});
+
+	const patterns: Pattern[] = [
+		{ name: "Pattern 1", tracks: pattern0Tracks },
+		...Array.from({ length: PATTERN_COUNT - 1 }, (_, i) => ({
+			name: `Pattern ${i + 2}`,
+			tracks: emptyPatternTracks(channels.length, plen),
+		})),
+	];
+
+	// Song starter: Pattern 1 for 2 bars (intro feel); leave room to arrange
 	return normalizeProject({
 		bpm: pack.bpm,
 		swing: pack.genre === "Trap" || pack.genre === "Drill" ? 0.12 : 0.06,
-		bars: 2,
+		patternLength: plen,
+		channels,
+		patterns,
+		activePattern: 0,
+		playMode: "pattern",
+		playlist: [{ id: "c0", patternIndex: 0, startBar: 0, lengthBars: 2 }],
 		masterGain: 0.85,
 		masterReverb: 0.14,
 		masterCrush: 0,
-		tracks: pack.samples.map((s) => {
-			const steps = Array.from({ length: 16 }, () => emptyStep());
-			const pattern = groove[s.role];
-			if (pattern && !usedRoles.has(s.role)) {
-				usedRoles.add(s.role);
-				const contour =
-					s.role === "bass" || s.role === "melody" || s.role === "vocal"
-						? pitches?.[s.role]
-						: undefined;
-				for (const i of pattern) {
-					const vel =
-						s.role === "hat" && i % 2 === 1
-							? 0.55
-							: s.role === "kick"
-								? 0.95
-								: 0.82;
-					steps[i] = hitStep(vel, contour?.[i] ?? 0, s.role === "bass" ? 2 : 1);
-				}
-			}
-			return {
-				sampleId: s.id,
-				steps,
-				gain: s.role === "kick" || s.role === "bass" ? 0.9 : 0.7,
-				mute: false,
-				solo: false,
-				pitch: 0,
-				filter: Math.max(0.45, s.filter),
-				drive: s.drive * 0.28,
-				pan:
-					s.role === "hat"
-						? 0.15
-						: s.role === "perc"
-							? -0.2
-							: s.role === "fx"
-								? 0.25
-								: 0,
-				reverb:
-					s.role === "melody" || s.role === "vocal" || s.role === "fx"
-						? 0.22
-						: s.role === "snare"
-							? 0.12
-							: 0.04,
-				delay: s.role === "melody" || s.role === "vocal" ? 0.12 : 0,
-				reverse: false,
-			};
-		}),
 	});
 }
 
 export function missingMustUse(pack: Pack, project: Project): string[] {
+	const p = normalizeProject(project);
 	const missing: string[] = [];
 	for (const id of pack.brief.mustUseIds) {
-		const track = project.tracks.find((t) => t.sampleId === id);
+		const chIdx = p.channels.findIndex((c) => c.sampleId === id);
 		const sample = pack.samples.find((s) => s.id === id);
-		const hits = track?.steps.filter((s) => stepOn(s)).length ?? 0;
-		if (!track || hits < 1) missing.push(sample?.name ?? id);
+		if (chIdx < 0) {
+			missing.push(sample?.name ?? id);
+			continue;
+		}
+		let hits = 0;
+		for (const pat of p.patterns) {
+			hits += pat.tracks[chIdx]?.steps.filter((s) => stepOn(s)).length ?? 0;
+		}
+		if (hits < 1) missing.push(sample?.name ?? id);
 	}
 	return missing;
 }
 
-export function countHits(track: TrackPattern): number {
-	return track.steps.filter((s) => stepOn(s)).length;
+export function songLengthBars(project: Project): number {
+	const p = normalizeProject(project);
+	if (p.playlist.length === 0) return 2;
+	return Math.max(...p.playlist.map((c) => c.startBar + c.lengthBars), 1);
 }

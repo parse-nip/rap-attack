@@ -1,5 +1,5 @@
 import type { Pack, Project } from "../../shared/types";
-import { missingMustUse, stepOn } from "../../shared/types";
+import { missingMustUse, normalizeProject, stepOn } from "../../shared/types";
 
 type Props = {
 	pack: Pack;
@@ -8,7 +8,8 @@ type Props = {
 };
 
 export function CookCard({ pack, project, onPreviewSample }: Props) {
-	const missing = missingMustUse(pack, project);
+	const p = normalizeProject(project);
+	const missing = missingMustUse(pack, p);
 	const mustSamples = pack.brief.mustUseIds
 		.map((id) => pack.samples.find((s) => s.id === id))
 		.filter(Boolean);
@@ -24,8 +25,15 @@ export function CookCard({ pack, project, onPreviewSample }: Props) {
 			<div className="must-grid">
 				{mustSamples.map((s) => {
 					if (!s) return null;
-					const track = project.tracks.find((t) => t.sampleId === s.id);
-					const hits = track?.steps.filter((cell) => stepOn(cell)).length ?? 0;
+					const chIdx = p.channels.findIndex((c) => c.sampleId === s.id);
+					let hits = 0;
+					if (chIdx >= 0) {
+						for (const pat of p.patterns) {
+							hits +=
+								pat.tracks[chIdx]?.steps.filter((cell) => stepOn(cell)).length ??
+								0;
+						}
+					}
 					const ok = hits > 0;
 					return (
 						<button

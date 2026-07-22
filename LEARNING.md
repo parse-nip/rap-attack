@@ -15,9 +15,10 @@ Track what you should be able to explain before calling the session done.
 - [ ] Why packs are **seeded synths** instead of shipping large sample files
 - [ ] Why voting re-renders **project JSON** with the same pack instead of transferring audio
 - [ ] What a **cook card** is (must-use elements + starter groove) and why it exists
-- [ ] What the full DAW views do (sequencer / piano roll / mixer / pads)
-- [ ] Step velocity, pitch, gate length, and why they matter for a “full” editor
-- [ ] Track FX sends (reverb/delay/pan) vs master bus
+- [ ] FL Pat vs Song mode and why patterns get arranged in a Playlist
+- [ ] Channel Rack + Graph Editor (velocity/pitch/pan per step)
+- [ ] Mixer inserts (EQ/comp) vs send FX
+- [ ] What we deliberately left out of FL (VSTs, Edison, 999 patterns) and why
 
 ## 3. Broader context
 
