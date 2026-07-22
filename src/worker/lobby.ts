@@ -260,7 +260,10 @@ export class BeatLobby extends DurableObject<Env> {
 						}
 						for (const id of pack.brief.mustUseIds) {
 							const track = msg.project.tracks.find((t) => t.sampleId === id);
-							const hits = track?.steps.filter(Boolean).length ?? 0;
+							const hits =
+								track?.steps.filter((s) =>
+									typeof s === "boolean" ? s : !!(s as { on?: boolean })?.on,
+								).length ?? 0;
 							if (hits < 1) {
 								const name = pack.samples.find((s) => s.id === id)?.name ?? id;
 								throw new Error(`Must use required element: ${name}`);

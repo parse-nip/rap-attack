@@ -3,6 +3,7 @@ import {
 	EMPTY_PROJECT,
 	GENRES,
 	missingMustUse,
+	normalizeProject,
 	type Genre,
 	type Heat,
 	type Project,

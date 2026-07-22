@@ -1,0 +1,283 @@
+.daw-pro {
+	gap: 0.75rem;
+}
+
+.daw-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+
+.view-tabs,
+.tool-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.35rem;
+}
+
+.pad-side {
+	display: grid;
+	gap: 0.25rem;
+}
+
+.row-tools {
+	display: flex;
+	gap: 2px;
+}
+
+.mini {
+	appearance: none;
+	border: 1px solid var(--line);
+	background: var(--bg1);
+	color: var(--muted);
+	font-family: var(--font-mono);
+	font-size: 0.58rem;
+	padding: 0.15rem 0.28rem;
+	border-radius: 3px;
+	cursor: pointer;
+}
+
+.mini.hot {
+	border-color: var(--accent);
+	color: var(--accent-2);
+}
+
+.daw-pro .seq-row {
+	grid-template-columns: 148px 1fr;
+}
+
+.step.on {
+	transform-origin: bottom center;
+}
+
+.piano-roll {
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	overflow: hidden;
+	background: rgba(8, 9, 12, 0.9);
+}
+
+.piano-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0.65rem 0.8rem;
+	border-bottom: 1px solid var(--line);
+}
+
+.piano-meta span {
+	color: var(--muted);
+	font-size: 0.8rem;
+}
+
+.piano-oct {
+	display: flex;
+	gap: 0.35rem;
+}
+
+.piano-grid {
+	max-height: 360px;
+	overflow: auto;
+	display: grid;
+}
+
+.piano-row {
+	display: grid;
+	grid-template-columns: 56px 1fr;
+	min-height: 18px;
+}
+
+.piano-row.black {
+	background: rgba(255, 255, 255, 0.025);
+}
+
+.piano-key {
+	appearance: none;
+	border: none;
+	border-right: 1px solid var(--line);
+	border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+	background: transparent;
+	color: var(--muted);
+	font-family: var(--font-mono);
+	font-size: 0.58rem;
+	text-align: left;
+	padding: 0 0.35rem;
+	cursor: pointer;
+}
+
+.piano-steps {
+	display: grid;
+	grid-template-columns: repeat(16, minmax(18px, 1fr));
+	gap: 1px;
+	padding: 1px;
+}
+
+.pstep {
+	appearance: none;
+	border: none;
+	background: rgba(255, 255, 255, 0.03);
+	min-height: 16px;
+	cursor: pointer;
+	padding: 0;
+}
+
+.pstep.beat {
+	background: rgba(255, 255, 255, 0.06);
+}
+
+.pstep.on {
+	background: var(--accent);
+	box-shadow: 0 0 8px var(--glow);
+}
+
+.pstep.now {
+	outline: 1px solid var(--accent-2);
+}
+
+.mixer-board {
+	overflow-x: auto;
+}
+
+.mixer-strips {
+	display: flex;
+	gap: 0.45rem;
+	padding-bottom: 0.35rem;
+	min-width: max-content;
+}
+
+.strip {
+	width: 92px;
+	background: var(--bg1);
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	padding: 0.55rem 0.4rem;
+	display: grid;
+	gap: 0.35rem;
+	align-content: start;
+}
+
+.strip.selected {
+	border-color: rgba(255, 90, 31, 0.55);
+}
+
+.strip-name {
+	font-size: 0.68rem;
+	font-weight: 700;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.strip label {
+	display: grid;
+	gap: 0.15rem;
+	font-size: 0.62rem;
+	color: var(--muted);
+}
+
+.strip input[type="range"] {
+	width: 100%;
+}
+
+.strip-toggles {
+	display: flex;
+	gap: 0.2rem;
+	flex-wrap: wrap;
+}
+
+.master-strip {
+	border-color: rgba(255, 200, 87, 0.35);
+}
+
+.pads-view {
+	display: grid;
+	gap: 0.75rem;
+}
+
+.pads-hint {
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.85rem;
+}
+
+.pads-hint kbd {
+	font-family: var(--font-mono);
+	border: 1px solid var(--line);
+	padding: 0.05rem 0.3rem;
+	border-radius: 3px;
+}
+
+.pads-grid {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 0.55rem;
+}
+
+.drum-pad {
+	appearance: none;
+	aspect-ratio: 1.15;
+	border: 2px solid var(--line);
+	border-radius: 10px;
+	background:
+		radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.08), transparent 45%),
+		var(--bg2);
+	display: grid;
+	align-content: end;
+	justify-items: start;
+	gap: 0.15rem;
+	padding: 0.7rem;
+	cursor: pointer;
+	transition: transform 0.08s ease, border-color 0.15s ease;
+}
+
+.drum-pad:active {
+	transform: scale(0.97);
+}
+
+.drum-pad.selected {
+	border-color: var(--accent);
+}
+
+.pad-key {
+	font-family: var(--font-mono);
+	font-size: 0.7rem;
+	color: var(--accent-2);
+}
+
+.pad-role {
+	font-family: var(--font-mono);
+	font-size: 0.62rem;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.pad-name {
+	font-weight: 700;
+	font-size: 0.85rem;
+}
+
+.inspector .must-tag {
+	margin-left: 0.5rem;
+	font-family: var(--font-mono);
+	font-size: 0.65rem;
+	color: var(--accent);
+}
+
+.daw-shortcuts {
+	margin: 0.75rem 0 0;
+	color: var(--muted);
+	font-size: 0.75rem;
+	font-family: var(--font-mono);
+}
+
+@media (max-width: 720px) {
+	.pads-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+	.daw-pro .seq-row {
+		grid-template-columns: 120px 1fr;
+	}
+}

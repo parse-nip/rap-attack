@@ -1,5 +1,5 @@
 import type { Pack, Project } from "../../shared/types";
-import { missingMustUse } from "../../shared/types";
+import { missingMustUse, stepOn } from "../../shared/types";
 
 type Props = {
 	pack: Pack;
@@ -25,7 +25,7 @@ export function CookCard({ pack, project, onPreviewSample }: Props) {
 				{mustSamples.map((s) => {
 					if (!s) return null;
 					const track = project.tracks.find((t) => t.sampleId === s.id);
-					const hits = track?.steps.filter(Boolean).length ?? 0;
+					const hits = track?.steps.filter((cell) => stepOn(cell)).length ?? 0;
 					const ok = hits > 0;
 					return (
 						<button
@@ -52,9 +52,7 @@ export function CookCard({ pack, project, onPreviewSample }: Props) {
 				<strong>Tip:</strong> {pack.brief.tip}
 			</p>
 			{missing.length > 0 ? (
-				<p className="cook-warn">
-					Still need: {missing.join(", ")}
-				</p>
+				<p className="cook-warn">Still need: {missing.join(", ")}</p>
 			) : (
 				<p className="cook-ready">All required elements are in the pattern.</p>
 			)}
