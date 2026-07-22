@@ -12,7 +12,7 @@ export type Genre =
 
 export type Heat = 1 | 2 | 3 | 4 | 5;
 
-/** What your mouth is supposed to cover */
+/** What kind of mouth sound this one-shot is for the challenge */
 export type VoiceRole = "drums" | "bass" | "melody" | "harmony" | "fx";
 
 export const VOICE_ROLES: VoiceRole[] = [
@@ -24,11 +24,11 @@ export const VOICE_ROLES: VoiceRole[] = [
 ];
 
 export const ROLE_HELP: Record<VoiceRole, string> = {
-	drums: "Beatbox the kit — kick, snare, hats with your mouth",
-	bass: "Hum / throat the low end — match the groove",
-	melody: "Sing or whistle the hook",
-	harmony: "Stack a second vocal / ooohs",
-	fx: "Risers, whooshes, ad-libs, weird mouth noises",
+	drums: "One hit — kick, snare, or hat with your mouth",
+	bass: "One short hum / throat note",
+	melody: "One sung or whistled note",
+	harmony: "One oooh / stack note",
+	fx: "One whoosh, ad-lib, or weird noise",
 };
 
 export type Challenge = {
@@ -40,11 +40,11 @@ export type Challenge = {
 	bpm: number;
 	keyMidi: number;
 	bars: number;
-	/** Roles you must cover with voice */
 	mustRoles: VoiceRole[];
 	hint: string;
 };
 
+/** A short one-shot you recorded once — then stamp copies on the timeline */
 export type VoiceClip = {
 	id: string;
 	role: VoiceRole;
@@ -53,15 +53,14 @@ export type VoiceClip = {
 	mime: string;
 };
 
-export type VoiceLane = {
-	role: VoiceRole;
-	/** Clip id from project.clips, or null if empty */
-	clipId: string | null;
-	steps: boolean[];
-	gain: number;
-	mute: boolean;
-	/** Semitone-ish playback rate shift */
+/** One copy of a one-shot sitting on the timeline */
+export type Placement = {
+	id: string;
+	clipId: string;
+	/** Absolute step index across the loop (0 … bars*16 - 1) */
+	step: number;
 	pitch: number;
+	gain: number;
 };
 
 export type Project = {
@@ -69,7 +68,7 @@ export type Project = {
 	swing: number;
 	bars: number;
 	clips: VoiceClip[];
-	lanes: VoiceLane[];
+	placements: Placement[];
 	masterGain: number;
 };
 
@@ -103,9 +102,8 @@ export type LobbyState = {
 	phase: Phase;
 	settings: LobbySettings;
 	players: PlayerPublic[];
-	/** Shared challenge for the round */
 	challenge: Challenge | null;
-	/** @deprecated old field — ignored */
+	/** @deprecated */
 	pack?: unknown;
 	round: number;
 	phaseEndsAt: number | null;
@@ -149,6 +147,12 @@ export const GENRES: Genre[] = [
 	"Afrobeats",
 ];
 
+export const STEPS_PER_BAR = 16;
+
+export function totalSteps(bars: number): number {
+	return Math.max(1, bars) * STEPS_PER_BAR;
+}
+
 export function EMPTY_PROJECT(challenge: Challenge): Project {
 	return {
 		bpm: challenge.bpm,
@@ -156,86 +160,92 @@ export function EMPTY_PROJECT(challenge: Challenge): Project {
 		bars: challenge.bars,
 		masterGain: 0.9,
 		clips: [],
-		lanes: VOICE_ROLES.map((role) => ({
-			role,
-			clipId: null,
-			steps: defaultStepsForRole(role, challenge.genre),
-			gain: role === "bass" || role === "drums" ? 0.9 : 0.75,
-			mute: false,
-			pitch: 0,
-		})),
+		placements: [],
 	};
 }
 
-function defaultStepsForRole(role: VoiceRole, genre: Genre): boolean[] {
-	const steps = Array.from({ length: 16 }, () => false);
-	// Light ghost grid so they know where hits often go — still empty of audio
-	if (role === "drums") {
-		if (genre === "House" || genre === "EDM") {
-			[0, 4, 8, 12].forEach((i) => (steps[i] = true));
-		} else {
-			[0, 4, 7, 10, 12].forEach((i) => (steps[i] = true));
+export function normalizeProject(raw: Project | Record<string, unknown>): Project {
+	const r = raw as Project & {
+		lanes?: {
+			role: VoiceRole;
+			clipId: string | null;
+			steps: boolean[];
+			gain: number;
+			mute: boolean;
+			pitch: number;
+		}[];
+	};
+
+	const clips = (Array.isArray(r.clips) ? r.clips : [])
+		.filter((c) => c?.audioBase64 && c?.role)
+		.map((c) => ({
+			id: c.id,
+			role: c.role,
+			label: c.label || c.role,
+			audioBase64: c.audioBase64,
+			mime: c.mime || "audio/webm",
+		}));
+
+	const bars = Math.max(1, Math.min(4, r.bars || 2));
+	const maxStep = totalSteps(bars);
+
+	let placements: Placement[] = [];
+	if (Array.isArray(r.placements) && r.placements.length) {
+		placements = r.placements
+			.filter((p) => p?.clipId != null && Number.isFinite(p.step))
+			.map((p, i) => ({
+				id: p.id || `p${i}`,
+				clipId: p.clipId,
+				step: Math.max(0, Math.min(maxStep - 1, Math.floor(p.step))),
+				pitch: p.pitch ?? 0,
+				gain: p.gain ?? 1,
+			}));
+	} else if (Array.isArray(r.lanes)) {
+		// Migrate old lane/step model → placements
+		for (const lane of r.lanes) {
+			if (!lane.clipId || lane.mute) continue;
+			lane.steps?.forEach((on, si) => {
+				if (!on) return;
+				placements.push({
+					id: `mig-${lane.role}-${si}`,
+					clipId: lane.clipId!,
+					step: si % maxStep,
+					pitch: lane.pitch ?? 0,
+					gain: lane.gain ?? 1,
+				});
+			});
 		}
 	}
-	return steps;
-}
-
-export function normalizeProject(raw: Project | Record<string, unknown>): Project {
-	const r = raw as Project;
-	const clips = Array.isArray(r.clips) ? r.clips : [];
-	const lanes: VoiceLane[] =
-		Array.isArray(r.lanes) && r.lanes.length
-			? r.lanes.map((l) => ({
-					role: l.role,
-					clipId: l.clipId ?? null,
-					steps: Array.from({ length: 16 }, (_, i) => !!l.steps?.[i]),
-					gain: l.gain ?? 0.8,
-					mute: !!l.mute,
-					pitch: l.pitch ?? 0,
-				}))
-			: VOICE_ROLES.map((role) => ({
-					role,
-					clipId: null,
-					steps: Array.from({ length: 16 }, () => false),
-					gain: 0.8,
-					mute: false,
-					pitch: 0,
-				}));
 
 	return {
 		bpm: r.bpm || 120,
 		swing: r.swing ?? 0.08,
-		bars: Math.max(1, Math.min(4, r.bars || 2)),
+		bars,
 		masterGain: r.masterGain ?? 0.9,
-		clips: clips
-			.filter((c) => c?.audioBase64 && c?.role)
-			.map((c) => ({
-				id: c.id,
-				role: c.role,
-				label: c.label || c.role,
-				audioBase64: c.audioBase64,
-				mime: c.mime || "audio/webm",
-			})),
-		lanes,
+		clips,
+		placements,
 	};
 }
 
+/** Roles that still need ≥1 one-shot recorded AND stamped on the timeline */
 export function missingVoiceRoles(
 	challenge: Challenge,
 	project: Project,
 ): VoiceRole[] {
 	const p = normalizeProject(project);
 	return challenge.mustRoles.filter((role) => {
-		const lane = p.lanes.find((l) => l.role === role);
-		if (!lane?.clipId) return true;
-		const clip = p.clips.find((c) => c.id === lane.clipId);
-		if (!clip) return true;
-		const hits = lane.steps.filter(Boolean).length;
-		return hits < 1;
+		const roleClips = new Set(
+			p.clips.filter((c) => c.role === role).map((c) => c.id),
+		);
+		if (roleClips.size === 0) return true;
+		return !p.placements.some((pl) => roleClips.has(pl.clipId));
 	});
 }
 
-/** Cap total voice payload roughly (~1.5MB base64) */
+export function placementsForStep(project: Project, step: number): Placement[] {
+	return normalizeProject(project).placements.filter((p) => p.step === step);
+}
+
 export function projectAudioBytes(project: Project): number {
 	return normalizeProject(project).clips.reduce(
 		(n, c) => n + (c.audioBase64?.length ?? 0),

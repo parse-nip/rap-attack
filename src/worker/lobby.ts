@@ -267,11 +267,11 @@ export class BeatLobby extends DurableObject<Env> {
 						const missing = missingVoiceRoles(challenge, project);
 						if (missing.length) {
 							throw new Error(
-								`Record & place voice for: ${missing.join(", ")}`,
+								`Record a one-shot & stamp it for: ${missing.join(", ")}`,
 							);
 						}
-						if (!project.lanes.some((l) => l.clipId && l.steps.some(Boolean))) {
-							throw new Error("Place at least one voice clip on the grid");
+						if (project.placements.length < 1) {
+							throw new Error("Stamp at least one sound on the timeline");
 						}
 						if (projectAudioBytes(project) > 2_000_000) {
 							throw new Error("Voice clips too large — re-record shorter takes");

@@ -91,7 +91,7 @@ export default function App() {
 					<p className="eyebrow">popped.dev · a cappella remake battle</p>
 					<h1 className="brand">Mouth Ranked</h1>
 					<p className="tagline">
-						Hear the song clip. Remake it with only your voice. Vote blind.
+						Hear the song clip. Record one mouth sound. Stamp copies on the timeline. Vote.
 					</p>
 				</header>
 
@@ -128,9 +128,9 @@ export default function App() {
 					</div>
 					{homeError && <p className="error">{homeError}</p>}
 					<ul className="rules">
-						<li>Same challenge track for everyone</li>
-						<li>Beatbox drums, hum bass, sing the hook — only voice clips</li>
-						<li>Submit your remake and vote blind</li>
+						<li>Same challenge song clip for everyone</li>
+						<li>Record one mouth sound, then copy it across the timeline</li>
+						<li>Stamp drums / bass / melody — submit and vote blind</li>
 					</ul>
 				</section>
 			</div>
@@ -381,7 +381,7 @@ function CookupView({
 				<div>
 					<h2>Remake the clip</h2>
 					<p>
-						Heat {challenge.heat} · only your voice · no samples
+						Heat {challenge.heat} · one-shots you stamp · no sample packs
 					</p>
 				</div>
 				<div className={`timer ${seconds != null && seconds < 30 ? "urgent" : ""}`}>
@@ -490,13 +490,17 @@ function VotingView({
 				<ul className="vote-list">
 					{state.submissions.map((s) => {
 						const isMine = s.id === you;
-						const layers = s.project.clips?.length ?? 0;
+						const kit = s.project.clips?.length ?? 0;
+						const stamps = s.project.placements?.length ?? 0;
 						return (
 							<li key={s.id} className={state.myVote === s.id ? "voted" : ""}>
 								<div>
 									<strong>{s.label}</strong>
 									{isMine && <em> (yours — can't vote)</em>}
-									<span className="tag-badge"> {layers} voice layer{layers === 1 ? "" : "s"}</span>
+									<span className="tag-badge">
+										{" "}
+										{kit} sound{kit === 1 ? "" : "s"} · {stamps} stamps
+									</span>
 								</div>
 								<div className="vote-actions">
 									<button

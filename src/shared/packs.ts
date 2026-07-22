@@ -94,8 +94,8 @@ export function generateChallenge(
 
 	const hint =
 		heat >= 4
-			? "High heat: the reference is weirder — exaggerate your mouth sounds."
-			: "Listen a few times, then rebuild it with ONLY your voice.";
+			? "High heat: record wild one-shots, then stamp them everywhere."
+			: "Record one short mouth sound at a time, then copy it on the timeline.";
 
 	return {
 		seed,

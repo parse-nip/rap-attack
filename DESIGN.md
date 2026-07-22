@@ -1,27 +1,24 @@
 # Mouth Ranked — design
 
-## Pivot
+## Game
 
-FL Studio–style DAW and sample packs were too heavy. The game is now an **a cappella remake battle**:
+A cappella remake battle: hear a seeded song clip, remake it with **mouth one-shots** you stamp on a timeline, vote blind.
 
-1. Everyone hears the same **challenge song clip** (seeded synth reference — not a licensed commercial track).
-2. Players remake it using **only short recordings of their own voice** (drums / bass / melody / harmony / fx).
-3. Voice clips sit on a simple **16-step grid** per role.
-4. Submit → blind vote → standings.
+## Sampler workflow (the point)
 
-## Why this shape
+1. **Record one short sound** (~0.9s) — one kick, one hum, one note.
+2. It lands in your **mouth kit** (tagged drums / bass / melody / …).
+3. **Select that pad**, then tap the timeline to **copy** it wherever you want.
+4. Helpers: stamp every beat / 8ths / fill / copy bar 1 across the loop.
 
-- **One clear verb:** listen → record mouth layers → arrange → submit.
-- **No sample browser / mixer complexity** — the mic *is* the instrument.
-- **Copyright-safe:** reference is generated from seed + genre + heat, not ripped audio.
-- **Heat still matters:** higher heat requires more voice roles (harmony, fx).
+Not: record a full loop per role. Not: FL Channel Rack.
 
-## Data model
+## Data
 
-- `Challenge` — genre, bpm, key, vibe, `mustRoles`
-- `Project` — `clips[]` (base64 voice) + `lanes[]` (role, steps, gain, pitch)
-- Lobby DO still owns phases: `lobby` → `cookup` → `voting` → `results`
+- `VoiceClip` — one recorded one-shot (+ role)
+- `Placement` — `{ clipId, step, pitch, gain }` — a copy on the timeline
+- Challenge `mustRoles` → need ≥1 clip of that role **and** ≥1 placement using it
 
-## UX budget
+## Why
 
-First cookup screen: challenge title + play song + play remake + voice lanes. No cards in the hero, no FL chrome.
+Matches “I make one drum sound then copy it a bunch on the timeline.” Payload stays small (few shorts + many placements).

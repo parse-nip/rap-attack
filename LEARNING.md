@@ -1,29 +1,24 @@
-# Learning checklist — Mouth Ranked pivot
-
-Track understanding as you go. Check items only when you can explain them in your own words.
+# Learning checklist — sampler timeline
 
 ## 1. The problem
 
-- [ ] Why FL-style DAW + sample packs was the wrong fit for this lobby game
-- [ ] What “remake with only your voice” means for players
-- [ ] Why we generate a reference clip instead of using a real commercial song
+- [ ] Why “one full take per role” was the wrong read of the idea
+- [ ] What one-shot + stamp means vs looping a long recording
 
 ## 2. The solution
 
-- [ ] `Challenge` vs old `Pack` — what fields matter and why
-- [ ] How voice `clips` + `lanes` replace sequencer tracks
-- [ ] Why submit validates `mustRoles` (record + at least one step)
-- [ ] How `AcapellaEngine` plays the reference vs the remake
-- [ ] Lobby phases still: lobby → cookup → voting → results (what changed inside cookup)
+- [ ] `VoiceClip` = the recorded sound (once)
+- [ ] `Placement` = a copy of that sound at a step
+- [ ] Why “Stamp every beat” rewrites placements for the selected clip
+- [ ] How must-roles check both: recorded *and* stamped
 
 ## 3. Broader context
 
-- [ ] What this changes for players (skill: mouth sound design, not FL muscle memory)
-- [ ] Payload / size limits on voice base64 — why they exist
-- [ ] Heat’s new meaning (more required roles, not weirder samples)
+- [ ] Why short max record time (~0.9s) matters for this model
+- [ ] What “Copy bar 1 → all” is doing under the hood
 
-## Quiz prompts (answer before peeking at code)
+## Quiz
 
-1. If heat is 5, which roles must the player cover?
-2. What happens if someone records melody but leaves all melody steps off?
-3. Where does the “song clip” audio actually come from at runtime?
+1. You record a kick once and stamp it on steps 0, 4, 8, 12. How many `VoiceClip`s and how many `Placement`s?
+2. If you re-record a second kick as “drums 2”, does that replace the first pad or add another?
+3. Why can’t you stamp a bass sound on the drums timeline row?

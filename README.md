@@ -1,6 +1,6 @@
 # Mouth Ranked
 
-Multiplayer **a cappella remake battle** in the browser. Everyone gets the same short song clip, remakes it with **only their voice** (beatbox, hum, sing), then votes blind.
+Multiplayer **a cappella remake battle** in the browser. Everyone gets the same short song clip, then remakes it by recording **short mouth one-shots** and **stamping copies** on a timeline.
 
 **Live:** [beats.popped.dev](https://beats.popped.dev) (Cloudflare Workers).
 
@@ -31,7 +31,7 @@ npm run deploy
 
 1. Create or join a lobby (5-character code)
 2. Host sets heat / genre / timers; everyone readies
-3. Cook: play the challenge clip, record voice layers for drums/bass/melody (and more at higher heat), place them on the step grid
+3. Cook: play the challenge clip, record short mouth sounds into your kit, stamp them on the timeline
 4. Submit → vote blind → winner gets a W
 
 ## Scripts

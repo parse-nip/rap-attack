@@ -1,7 +1,7 @@
-/** Reference song synth + voice-lane playback for a cappella battles */
+/** Reference song synth + one-shot timeline playback */
 
-import type { Challenge, Project, VoiceRole } from "../../shared/types";
-import { normalizeProject } from "../../shared/types";
+import type { Challenge, Placement, Project } from "../../shared/types";
+import { normalizeProject, totalSteps } from "../../shared/types";
 import { mulberry32 } from "../../shared/packs";
 
 function midiToHz(midi: number) {
@@ -63,14 +63,13 @@ function writeTone(
 	}
 }
 
-/** Build a short reference "song clip" everyone hears */
 export function renderReferenceBuffer(
 	ctx: BaseAudioContext,
 	challenge: Challenge,
 ): AudioBuffer {
 	const sr = ctx.sampleRate;
 	const stepDur = 60 / challenge.bpm / 4;
-	const steps = 16 * challenge.bars;
+	const steps = totalSteps(challenge.bars);
 	const dur = steps * stepDur + 0.3;
 	const buffer = ctx.createBuffer(2, Math.ceil(sr * dur), sr);
 	const L = buffer.getChannelData(0);
@@ -94,12 +93,10 @@ export function renderReferenceBuffer(
 		if (drums.hat.includes(i)) {
 			writeTone(mono, sr, t, 0.06, 8000, 0.22, "noise");
 		}
-		// bass
 		if (drums.kick.includes(i) || i === 0 || i === 8) {
 			const deg = i >= 8 ? -5 : 0;
 			writeTone(mono, sr, t, stepDur * 1.6, midiToHz(root - 12 + deg), 0.55, "sine");
 		}
-		// melody
 		const m = contour[i]!;
 		if (m !== -99) {
 			writeTone(
@@ -112,7 +109,6 @@ export function renderReferenceBuffer(
 				challenge.genre === "Hyperpop" ? "square" : "sine",
 			);
 		}
-		// harmony ghost
 		if (i === 0 || i === 8) {
 			writeTone(mono, sr, t, stepDur * 3, midiToHz(root + 19), 0.12, "sine");
 		}
@@ -137,6 +133,25 @@ async function decodeBase64Audio(
 	}
 }
 
+function firePlacement(
+	ctx: AudioContext,
+	master: GainNode,
+	buffers: Map<string, AudioBuffer>,
+	placement: Placement,
+	time: number,
+) {
+	const buf = buffers.get(placement.clipId);
+	if (!buf) return;
+	const src = ctx.createBufferSource();
+	src.buffer = buf;
+	src.playbackRate.value = Math.pow(2, placement.pitch / 12);
+	const g = ctx.createGain();
+	g.gain.value = placement.gain;
+	src.connect(g);
+	g.connect(master);
+	src.start(time);
+}
+
 export class AcapellaEngine {
 	ctx: AudioContext;
 	master: GainNode;
@@ -145,6 +160,7 @@ export class AcapellaEngine {
 	private currentStep = 0;
 	private clipBuffers = new Map<string, AudioBuffer>();
 	private reference: AudioBuffer | null = null;
+	private refSrc: AudioBufferSourceNode | null = null;
 	playing = false;
 	playingRef = false;
 	project: Project;
@@ -187,42 +203,29 @@ export class AcapellaEngine {
 		src.onended = () => {
 			this.playingRef = false;
 		};
+		this.refSrc = src;
 		src.start();
-		// stash for stop
-		(this as unknown as { _refSrc?: AudioBufferSourceNode })._refSrc = src;
 	}
 
 	private secondsPerStep() {
 		return 60 / this.project.bpm / 4;
 	}
 
-	private scheduleLane(role: VoiceRole, stepIdx: number, time: number) {
-		const lane = this.project.lanes.find((l) => l.role === role);
-		if (!lane || lane.mute || !lane.steps[stepIdx] || !lane.clipId) return;
-		const buf = this.clipBuffers.get(lane.clipId);
-		if (!buf) return;
-		const src = this.ctx.createBufferSource();
-		src.buffer = buf;
-		src.playbackRate.value = Math.pow(2, lane.pitch / 12);
-		const g = this.ctx.createGain();
-		g.gain.value = lane.gain;
-		src.connect(g);
-		g.connect(this.master);
-		src.start(time);
-	}
-
 	private scheduler = () => {
 		const lookAhead = 0.12;
 		const stepDur = this.secondsPerStep();
-		const total = 16 * this.project.bars;
+		const total = totalSteps(this.project.bars);
 		while (this.nextNoteTime < this.ctx.currentTime + lookAhead) {
-			const idx = this.currentStep % 16;
+			const step = this.currentStep % total;
+			const idx = step % 16;
 			const swing = idx % 2 === 1 ? this.project.swing * stepDur * 0.55 : 0;
 			const t = this.nextNoteTime + swing;
-			for (const lane of this.project.lanes) {
-				this.scheduleLane(lane.role, idx, t);
+			for (const pl of this.project.placements) {
+				if (pl.step === step) {
+					firePlacement(this.ctx, this.master, this.clipBuffers, pl, t);
+				}
 			}
-			this.onStep?.(this.currentStep % total);
+			this.onStep?.(step);
 			this.nextNoteTime += stepDur;
 			this.currentStep = (this.currentStep + 1) % total;
 		}
@@ -243,12 +246,12 @@ export class AcapellaEngine {
 		this.playingRef = false;
 		if (this.timer != null) clearTimeout(this.timer);
 		this.timer = null;
-		const refSrc = (this as unknown as { _refSrc?: AudioBufferSourceNode })._refSrc;
 		try {
-			refSrc?.stop();
+			this.refSrc?.stop();
 		} catch {
 			/* */
 		}
+		this.refSrc = null;
 		this.currentStep = 0;
 		this.onStep?.(0);
 	}
@@ -273,8 +276,12 @@ export async function renderRemakeWav(projectIn: Project): Promise<Blob> {
 	const project = normalizeProject(projectIn);
 	const sr = 44100;
 	const stepDur = 60 / project.bpm / 4;
-	const total = 16 * project.bars * 2;
-	const offline = new OfflineAudioContext(2, Math.ceil(sr * (total * stepDur + 0.5)), sr);
+	const total = totalSteps(project.bars) * 2;
+	const offline = new OfflineAudioContext(
+		2,
+		Math.ceil(sr * (total * stepDur + 0.5)),
+		sr,
+	);
 	const buffers = new Map<string, AudioBuffer>();
 	for (const clip of project.clips) {
 		const buf = await decodeBase64Audio(offline, clip.audioBase64);
@@ -284,19 +291,21 @@ export async function renderRemakeWav(projectIn: Project): Promise<Blob> {
 	master.gain.value = project.masterGain;
 	master.connect(offline.destination);
 
+	const loopLen = totalSteps(project.bars);
 	for (let step = 0; step < total; step++) {
 		const idx = step % 16;
 		const swing = idx % 2 === 1 ? project.swing * stepDur * 0.55 : 0;
 		const time = step * stepDur + swing;
-		for (const lane of project.lanes) {
-			if (lane.mute || !lane.steps[idx] || !lane.clipId) continue;
-			const buf = buffers.get(lane.clipId);
+		const local = step % loopLen;
+		for (const pl of project.placements) {
+			if (pl.step !== local) continue;
+			const buf = buffers.get(pl.clipId);
 			if (!buf) continue;
 			const src = offline.createBufferSource();
 			src.buffer = buf;
-			src.playbackRate.value = Math.pow(2, lane.pitch / 12);
+			src.playbackRate.value = Math.pow(2, pl.pitch / 12);
 			const g = offline.createGain();
-			g.gain.value = lane.gain;
+			g.gain.value = pl.gain;
 			src.connect(g);
 			g.connect(master);
 			src.start(time);
